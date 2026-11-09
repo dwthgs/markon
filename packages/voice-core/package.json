@@ -1,0 +1,28 @@
+{
+  "name": "@markon/voice-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "harness": "vite --port 5174 --strictPort"
+  },
+  "peerDependencies": {
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "24.10.1",
+    "@types/react": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "8.3.7",
+    "vitest": "5.1.0"
+  }
+}
