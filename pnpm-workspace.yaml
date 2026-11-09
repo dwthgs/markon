@@ -20,3 +20,6 @@ minimumReleaseAgeExclude:
   - "@rolldown/binding-win32-x64-msvc@1.2.18"
   - rolldown@1.2.18
   - vite@8.3.7
+  - "@vitejs/plugin-react@6.3.0"
+saveExact: true
+engineStrict: true

@@ -10,6 +10,7 @@ declare global {
       tick(n: number): void;
       timeFrames(n: number, batch?: number): number[];
       pixels(): string;
+      still(variant: Variant, state: CoreState, W: number, frames: number, bg: boolean): string;
     };
   }
 }
@@ -57,4 +58,29 @@ window.harness = {
     return out;
   },
   pixels: () => cv.toDataURL('image/png'),
+  // Still image for the app icon and tray. bg adds the dark rounded tile used by the app icon.
+  still(v, state, w, frames, bg) {
+    const e = new CoreEngine({ seed: 11, demo: true });
+    e.setState(state);
+    for (let i = 0; i < frames; i++) e.step(1 / 60);
+    const core = document.createElement('canvas');
+    core.width = w;
+    core.height = w;
+    drawVariant(e, core.getContext('2d') as CanvasRenderingContext2D, w, v);
+    const out = document.createElement('canvas');
+    out.width = w;
+    out.height = w;
+    const o = out.getContext('2d') as CanvasRenderingContext2D;
+    if (bg) {
+      const g = o.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w * 0.7);
+      g.addColorStop(0, '#071624');
+      g.addColorStop(1, '#03060c');
+      o.fillStyle = g;
+      o.beginPath();
+      o.roundRect(w * 0.1, w * 0.1, w * 0.8, w * 0.8, w * 0.18);
+      o.fill();
+      o.drawImage(core, w * 0.14, w * 0.14, w * 0.72, w * 0.72);
+    } else o.drawImage(core, 0, 0);
+    return out.toDataURL('image/png');
+  },
 };

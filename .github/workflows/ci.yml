@@ -1,0 +1,35 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# macOS only for now.
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: clippy, rustfmt
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+      - run: brew install cmake
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      - run: pnpm biome check .
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm --filter @markon/voice-core e2e
+      - run: pnpm --filter @markon/desktop build
+      - run: pnpm --filter @markon/desktop e2e
+      - run: cargo install cargo-deny@0.20.2 --locked
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo deny check
