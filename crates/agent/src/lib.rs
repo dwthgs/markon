@@ -271,10 +271,14 @@ impl Agent {
         let started = Instant::now();
         let cfg = self.cfg.read().expect("cfg lock").clone();
         let provider = self.provider();
-        let model = cfg
-            .model
-            .clone()
-            .unwrap_or_else(|| provider.default_model());
+        let current_model = || {
+            self.cfg
+                .read()
+                .expect("cfg lock")
+                .model
+                .clone()
+                .unwrap_or_else(|| provider.default_model())
+        };
         let system = self
             .sections
             .iter()
@@ -292,7 +296,7 @@ impl Agent {
 
         loop {
             let req = ChatRequest {
-                model: model.clone(),
+                model: current_model(),
                 system: system.clone(),
                 messages: msgs.clone(),
                 tools: tools.clone(),
@@ -343,7 +347,7 @@ impl Agent {
                             .push(json!({"type": "text", "text": WRAP_UP}));
                         msgs.push(results);
                         let req = ChatRequest {
-                            model: model.clone(),
+                            model: current_model(),
                             system: system.clone(),
                             messages: msgs.clone(),
                             tools: tools.clone(),
@@ -391,7 +395,7 @@ impl Agent {
             partial,
             usage,
             provider: provider.route().into(),
-            model,
+            model: current_model(),
         }));
     }
 
@@ -413,12 +417,25 @@ impl Agent {
         cancelled: &mut watch::Receiver<u64>,
     ) -> RoundEnd {
         let mut attempt = 0;
+        let mut req = req;
         loop {
             let before = text.len();
             let end = self
                 .round(provider, req.clone(), turn_id, msgs, text, usage, cancelled)
                 .await;
             match end {
+                // A deprecated model falls back to the route's default, and the user is told.
+                RoundEnd::Failed(ProviderError::ModelUnavailable(_))
+                    if req.model != provider.default_model() =>
+                {
+                    let fallback = provider.default_model();
+                    self.emit(AgentEvent::Error(format!(
+                        "{} is no longer available; using {fallback} instead.",
+                        req.model
+                    )));
+                    self.cfg.write().expect("cfg lock").model = Some(fallback.clone());
+                    req.model = fallback;
+                }
                 RoundEnd::Failed(e)
                     if e.retryable() && attempt + 1 < cfg.tries && text.len() == before =>
                 {

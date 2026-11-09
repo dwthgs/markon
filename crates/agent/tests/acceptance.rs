@@ -294,3 +294,30 @@ fn events_serialise_for_the_ui() {
     let e = serde_json::to_value(AgentEvent::Error("x".into())).unwrap();
     assert_eq!(e, json!({"type": "error", "data": "x"}));
 }
+
+#[tokio::test]
+async fn a_deprecated_model_falls_back_to_the_default_and_says_so() {
+    let fake = Arc::new(FakeProvider::new(vec![
+        vec![Err(ProviderError::ModelUnavailable("old-model".into()))],
+        FakeProvider::text("Fine."),
+    ]));
+    let (a, mut rx) = Agent::new(
+        fake.clone(),
+        Arc::new(Tools),
+        AgentConfig {
+            model: Some("old-model".into()),
+            ..AgentConfig::default()
+        },
+    );
+    a.submit(UserTurn::text("hi")).await;
+    let ev = drain(&mut rx).await;
+    assert_eq!(finished(&ev).text, "Fine.");
+    assert_eq!(finished(&ev).model, "fake");
+    assert!(
+        ev.iter()
+            .any(|e| matches!(e, AgentEvent::Error(m) if m.contains("old-model")))
+    );
+    let reqs = fake.requests.lock().unwrap();
+    assert_eq!(reqs[0].model, "old-model");
+    assert_eq!(reqs[1].model, "fake");
+}
