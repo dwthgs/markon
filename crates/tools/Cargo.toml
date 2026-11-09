@@ -1,0 +1,25 @@
+[package]
+name = "markon-tools"
+description = "Native tools, MCP client and permission tiers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+markon-agent = { path = "../agent" }
+markon-platform = { path = "../platform" }
+markon-provider = { path = "../provider" }
+rmcp = { workspace = true, default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rmcp = { workspace = true, features = ["client", "server", "macros", "schemars", "transport-async-rw"] }
