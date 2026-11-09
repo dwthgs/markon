@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const EV_AGENT: &str = "markon://agent";
@@ -51,6 +52,7 @@ pub struct Core {
     turn_done: AtomicBool,
     models_ready: AtomicBool,
     model_note: Mutex<String>,
+    ptt: Mutex<crate::ptt::Ptt>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,6 +237,7 @@ impl Core {
             turn_done: AtomicBool::new(true),
             models_ready: AtomicBool::new(false),
             model_note: Mutex::new("Checking speech models".into()),
+            ptt: Mutex::new(crate::ptt::Ptt::default()),
         });
         *core_cell.lock().expect("cell") = Some(Arc::downgrade(&core));
 
@@ -412,7 +415,7 @@ impl Core {
         self.queued_speech.store(false, Ordering::SeqCst);
     }
 
-    fn on_audio(&self, e: &AudioEvent) {
+    fn on_audio(self: &Arc<Self>, e: &AudioEvent) {
         match e {
             AudioEvent::PlaybackStarted => {
                 self.agent.set_state(AgentState::Speaking);
@@ -424,12 +427,36 @@ impl Core {
             {
                 self.agent.set_state(AgentState::Idle);
             }
+            AudioEvent::SpeechStarted => self.ptt.lock().expect("ptt").speech_started(),
+            AudioEvent::SpeechEnded => {
+                let action = self.ptt.lock().expect("ptt").speech_ended();
+                self.ptt_act(action);
+            }
             _ => {}
         }
     }
 
-    /// Push-to-talk pressed: interrupt whatever is happening and listen.
-    pub fn ptt_pressed(&self) {
+    /// Push-to-talk pressed: interrupt whatever is happening and listen (or end a tapped session).
+    pub fn ptt_pressed(self: &Arc<Self>) {
+        let action = self.ptt.lock().expect("ptt").pressed(Instant::now());
+        self.ptt_act(action);
+    }
+
+    /// Push-to-talk released: a hold ends the turn, a tap keeps listening until a pause.
+    pub fn ptt_released(self: &Arc<Self>) {
+        let action = self.ptt.lock().expect("ptt").released(Instant::now());
+        self.ptt_act(action);
+    }
+
+    fn ptt_act(self: &Arc<Self>, action: crate::ptt::Action) {
+        match action {
+            crate::ptt::Action::Listen(session) => self.start_listening(session),
+            crate::ptt::Action::Finish => self.finish_listening(),
+            crate::ptt::Action::Nothing => {}
+        }
+    }
+
+    fn start_listening(self: &Arc<Self>, session: u64) {
         if self.audio.is_speaking() || self.agent.state() == AgentState::Thinking {
             self.audio.cancel_speech();
             self.agent.cancel();
@@ -438,11 +465,18 @@ impl Core {
         self.agent.set_state(AgentState::Listening);
         if self.audio.start_listening().is_err() {
             self.agent.set_state(AgentState::Idle);
+            return;
         }
+        let c = self.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(crate::ptt::NO_SPEECH).await;
+            let action = c.ptt.lock().expect("ptt").timed_out(session);
+            c.ptt_act(action);
+        });
     }
 
-    /// Push-to-talk released: transcribe and send.
-    pub fn ptt_released(self: &Arc<Self>) {
+    /// Stop recording, transcribe and send. Runs off the audio thread: the sink calls in from there.
+    fn finish_listening(self: &Arc<Self>) {
         let c = self.clone();
         tauri::async_runtime::spawn(async move {
             let audio = c.audio.clone();
@@ -460,6 +494,12 @@ impl Core {
                 }
                 _ => {
                     c.agent.set_state(AgentState::Idle);
+                    let _ = c.app.emit(
+                        EV_AUDIO,
+                        AudioEvent::Error {
+                            message: "I didn't hear any words. Hold Alt+Space while you talk, or tap it and speak.".into(),
+                        },
+                    );
                 }
             }
         });
