@@ -1,6 +1,8 @@
 //! Memory: conversations, turns, cards, facts and preferences in one SQLite file (WAL),
 //! with FTS5 recall. Facts come only from explicit user statements or confirmed tool results.
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::OptionalExtension;
+/// Re-exported for crates that keep their own tables in this database (the scheduler).
+pub use rusqlite::{Connection, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::Path;

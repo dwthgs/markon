@@ -1,0 +1,19 @@
+[package]
+name = "markon-scheduler"
+description = "Cron schedules for agents that run without a prompt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+croner = { workspace = true, features = ["chrono"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+markon-memory = { path = "../memory" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
