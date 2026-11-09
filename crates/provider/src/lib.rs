@@ -9,6 +9,8 @@ use tokio::sync::mpsc;
 
 pub mod anthropic;
 pub mod fake;
+pub mod openrouter;
+pub mod relay;
 pub mod sse;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
