@@ -1,5 +1,6 @@
 //! Markon desktop shell: owns the window, tray, menu and hotkey, and wires the Rust core to the UI.
 mod core;
+mod remember;
 mod settings;
 mod tray;
 mod voice_commands;
@@ -87,6 +88,32 @@ fn mcp_status(core: State<'_, CoreState>) -> serde_json::Value {
     workspace::mcp_status(&core.tools)
 }
 
+#[tauri::command]
+fn history_list(core: State<'_, CoreState>) -> Result<Vec<markon_memory::Conversation>, String> {
+    core.memory.conversations(50).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_conversation(core: State<'_, CoreState>, id: i64) -> Result<usize, String> {
+    core.open_conversation(id)
+}
+
+/// "Bring back [topic]".
+#[tauri::command]
+fn bring_back(core: State<'_, CoreState>, topic: String) -> Result<usize, String> {
+    match core
+        .memory
+        .find_conversation(&topic)
+        .map_err(|e| e.to_string())?
+    {
+        Some(id) => core.open_conversation(id),
+        None => {
+            core.say(&format!("I couldn't find anything about {topic}."));
+            Ok(0)
+        }
+    }
+}
+
 /// Dev builds report the window's frame rate here so it can be checked without devtools.
 #[tauri::command]
 fn report_fps(fps: f64) {
@@ -163,6 +190,9 @@ pub fn run() {
             answer_permission,
             capture_window,
             mcp_status,
+            history_list,
+            open_conversation,
+            bring_back,
             report_fps
         ])
         .run(tauri::generate_context!())

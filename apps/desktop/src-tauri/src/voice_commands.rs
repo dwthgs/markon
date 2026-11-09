@@ -63,6 +63,15 @@ pub fn handle(core: &Core, text: &str) -> bool {
     if cmd == "hide" {
         core.hide();
     }
+    if cmd == "bring_back" {
+        match core.memory.find_conversation(&arg) {
+            Ok(Some(id)) => {
+                let _ = core.open_conversation(id);
+            }
+            _ => core.say(&format!("I couldn't find anything about {arg}.")),
+        }
+        return true;
+    }
     // Quit asks for confirmation in the UI; the rest are canvas actions the UI performs.
     let _ = core.app.emit(
         EV_COMMAND,

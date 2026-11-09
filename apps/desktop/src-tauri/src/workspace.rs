@@ -15,6 +15,7 @@ use tokio::sync::oneshot;
 
 pub const EV_CARD: &str = "markon://card";
 pub const EV_PERMISSION: &str = "markon://permission";
+pub const EV_CARDS_LOAD: &str = "markon://cards-load";
 /// An unanswered prompt is a "no".
 const ASK_TIMEOUT: Duration = Duration::from_secs(120);
 

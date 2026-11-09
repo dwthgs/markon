@@ -2667,10 +2667,13 @@ dependencies = [
 name = "markon-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "markon-agent",
  "markon-audio",
+ "markon-memory",
  "markon-platform",
  "markon-provider",
+ "markon-scheduler",
  "markon-tools",
  "serde",
  "serde_json",

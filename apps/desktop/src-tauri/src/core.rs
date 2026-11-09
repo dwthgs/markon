@@ -4,12 +4,15 @@ use crate::workspace::{self, HudPrompter, TurnCards};
 use markon_agent::{Agent, AgentConfig, AgentEvent, AgentState, StaticSection, UserTurn};
 use markon_audio::sentences::SentenceQueue;
 use markon_audio::{Audio, AudioEvent, Voice, manifest::Manifest};
+use markon_memory::{FactOrigin, Memory, Source};
 use markon_platform::{MacOs, Platform, accounts};
 use markon_provider::anthropic::AnthropicDirect;
 use markon_provider::{KeySource, ModelProvider};
+use markon_scheduler::{Delivery, Scheduler};
 use markon_tools::Runtime;
-use markon_tools::cards::Card;
+use markon_tools::cards::{Card, CardKind, CardStatus};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -34,6 +37,14 @@ pub struct Core {
     pub prompter: Arc<HudPrompter>,
     turn_cards: TurnCards,
     last_user: Mutex<String>,
+    pub memory: Arc<Memory>,
+    pub scheduler: Scheduler,
+    /// The conversation turns and cards are written to (one per session or scheduled run).
+    conv: Arc<Mutex<Option<i64>>>,
+    /// Card ids per turn, so a cancelled turn leaves none behind.
+    turn_card_ids: Arc<Mutex<HashMap<u64, Vec<String>>>>,
+    /// A scheduled run during a call posts a card instead of speaking.
+    muted: AtomicBool,
     sentences: Mutex<SentenceQueue>,
     reply_started: AtomicBool,
     queued_speech: AtomicBool,
@@ -106,9 +117,41 @@ impl Core {
             }
         })));
 
-        let card_app = app.clone();
+        let memory = Arc::new(Memory::open(&dir.join("markon.db")).unwrap_or_else(|e| {
+            eprintln!("[memory] cannot open the database ({e}); this session is not remembered");
+            Memory::open_in_memory().expect("in-memory database")
+        }));
+        let conv: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+        let turn_card_ids: Arc<Mutex<HashMap<u64, Vec<String>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let (card_app, card_mem, card_conv, card_ids) = (
+            app.clone(),
+            memory.clone(),
+            conv.clone(),
+            turn_card_ids.clone(),
+        );
         let card_sink: Arc<dyn Fn(Card) + Send + Sync> = Arc::new(move |c: Card| {
             let _ = card_app.emit(workspace::EV_CARD, &c);
+            // Cards persist per conversation so History can bring them back.
+            if let Some(cv) = *card_conv.lock().expect("conv") {
+                let kind = serde_json::to_value(c.kind)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+                let _ = card_mem.save_card(
+                    cv,
+                    &c.id,
+                    &kind,
+                    &c.title,
+                    &serde_json::to_value(&c).unwrap_or_default(),
+                );
+                card_ids
+                    .lock()
+                    .expect("ids")
+                    .entry(c.turn_id)
+                    .or_default()
+                    .push(c.id.clone());
+            }
         });
         let prompter = Arc::new(HudPrompter::new(app.clone()));
         let tools = workspace::runtime(
@@ -128,6 +171,16 @@ impl Core {
             },
         );
         agent.add_section(Arc::new(StaticSection(persona(voice))));
+        agent.add_section(Arc::new(crate::remember::RecallSection(memory.clone())));
+        let scheduler = Scheduler::new(memory.clone());
+        if let Err(e) = scheduler.ensure(
+            markon_scheduler::MORNING_BRIEFING,
+            "30 7 * * *",
+            &markon_scheduler::morning_briefing(),
+            chrono::Local::now(),
+        ) {
+            eprintln!("[scheduler] {e}");
+        }
         let core = Arc::new(Self {
             app: app.clone(),
             platform,
@@ -139,6 +192,11 @@ impl Core {
             prompter,
             turn_cards: TurnCards::new(card_sink),
             last_user: Mutex::new(String::new()),
+            memory,
+            scheduler,
+            conv,
+            turn_card_ids,
+            muted: AtomicBool::new(false),
             sentences: Mutex::new(SentenceQueue::new(MAX_SENTENCES)),
             reply_started: AtomicBool::new(false),
             queued_speech: AtomicBool::new(false),
@@ -160,6 +218,8 @@ impl Core {
             .name("markon-models".into())
             .spawn(move || c.prepare_models(voice))
             .expect("models thread");
+        let c = core.clone();
+        tauri::async_runtime::spawn(async move { c.schedule_loop().await });
         core
     }
 
@@ -246,6 +306,22 @@ impl Core {
                 self.speak_all(done);
             }
             AgentEvent::TurnFinished(t) => {
+                self.persist_turn(t);
+                if self.muted.swap(false, Ordering::SeqCst) {
+                    // Quiet delivery: the answer is pinned as a note and nothing is spoken.
+                    self.reset_reply();
+                    let note = Card::new(
+                        format!("note-{}", t.turn_id),
+                        t.turn_id,
+                        CardKind::Note,
+                        "Scheduled".to_string(),
+                    )
+                    .with(CardStatus::Done, serde_json::json!({"text": t.text}));
+                    (self.turn_cards_sink())(note);
+                    self.turn_done.store(true, Ordering::SeqCst);
+                    self.agent.set_state(AgentState::Idle);
+                    return;
+                }
                 let tail = self.sentences.lock().expect("sentences").finish();
                 // An apology or refusal with no streamed text still gets spoken.
                 let spoken_any = self.reply_started.load(Ordering::SeqCst);
@@ -261,7 +337,13 @@ impl Core {
                     self.agent.set_state(AgentState::Idle);
                 }
             }
-            AgentEvent::TurnCancelled { .. } => {
+            AgentEvent::TurnCancelled { turn_id } => {
+                if let (Some(cv), Some(ids)) = (
+                    *self.conv.lock().expect("conv"),
+                    self.turn_card_ids.lock().expect("ids").remove(turn_id),
+                ) {
+                    let _ = self.memory.delete_cards_where(cv, &ids);
+                }
                 self.audio.cancel_speech();
                 self.reset_reply();
                 self.turn_done.store(true, Ordering::SeqCst);
@@ -271,6 +353,9 @@ impl Core {
     }
 
     fn speak_all(&self, sentences: Vec<String>) {
+        if self.muted.load(Ordering::SeqCst) {
+            return;
+        }
         for s in sentences {
             if self.audio.speak(&s).is_err() {
                 return; // voice not ready: the reply is still shown as text
@@ -343,10 +428,166 @@ impl Core {
             self.agent.set_state(AgentState::Idle);
             return;
         }
+        let source = match turn.source {
+            markon_agent::TurnSource::Voice => Source::Voice,
+            markon_agent::TurnSource::Text => Source::Text,
+            markon_agent::TurnSource::Schedule => Source::Schedule,
+        };
+        let cv = self.ensure_conv(source, &turn.text);
+        if let Some(cmd) = crate::remember::parse(&turn.text) {
+            let reply = match cmd {
+                crate::remember::MemoryCommand::Remember(subject, statement) => {
+                    let saved = self
+                        .memory
+                        .add_turn(cv, "user", &turn.text, 0, 0, "local", "local")
+                        .and_then(|t| {
+                            self.memory.add_fact(
+                                &subject,
+                                &statement,
+                                t,
+                                1.0,
+                                FactOrigin::UserStated,
+                            )
+                        });
+                    if saved.is_ok() {
+                        "Got it, I'll remember that."
+                    } else {
+                        "Sorry, I couldn't save that."
+                    }
+                }
+                crate::remember::MemoryCommand::ForgetThat => match self.memory.forget_last(cv) {
+                    Ok(Some(_)) => "Done, I've forgotten it.",
+                    _ => "There's nothing from this conversation to forget.",
+                },
+            };
+            self.say(reply);
+            return;
+        }
         self.reset_reply();
         self.turn_done.store(false, Ordering::SeqCst);
         *self.last_user.lock().expect("last_user") = turn.text.clone();
         self.agent.submit(turn).await;
+    }
+
+    fn turn_cards_sink(&self) -> impl Fn(Card) + '_ {
+        move |c: Card| {
+            let _ = self.app.emit(workspace::EV_CARD, &c);
+            if let Some(cv) = *self.conv.lock().expect("conv") {
+                let _ = self.memory.save_card(
+                    cv,
+                    &c.id,
+                    "note",
+                    &c.title,
+                    &serde_json::to_value(&c).unwrap_or_default(),
+                );
+            }
+        }
+    }
+
+    /// The current conversation, started on the first turn of a session.
+    fn ensure_conv(&self, source: Source, first_text: &str) -> i64 {
+        let mut conv = self.conv.lock().expect("conv");
+        if let Some(c) = *conv {
+            return c;
+        }
+        let id = self.memory.start_conversation(source).unwrap_or(0);
+        let title: String = first_text.chars().take(60).collect();
+        let _ = self.memory.set_title(id, &title);
+        *conv = Some(id);
+        id
+    }
+
+    /// Only finished turns are written: a cancelled turn leaves no half-written memory.
+    fn persist_turn(&self, t: &markon_agent::TurnSummary) {
+        let Some(cv) = *self.conv.lock().expect("conv") else {
+            return;
+        };
+        let _ = self
+            .memory
+            .add_turn(cv, "user", &t.user, 0, 0, &t.provider, &t.model);
+        let text = if t.partial {
+            format!("{} [interrupted]", t.text)
+        } else {
+            t.text.clone()
+        };
+        let _ = self.memory.add_turn(
+            cv,
+            "assistant",
+            &text,
+            t.usage.0,
+            t.usage.1,
+            &t.provider,
+            &t.model,
+        );
+        let _ = self
+            .memory
+            .record_usage(&t.provider, &t.model, t.usage.0, t.usage.1);
+    }
+
+    /// Speak a short local reply (no model round trip).
+    pub fn say(&self, text: &str) {
+        let _ = self.app.emit(
+            EV_AGENT,
+            AgentEvent::TextDelta {
+                turn_id: 0,
+                text: text.into(),
+            },
+        );
+        self.agent.set_state(AgentState::Thinking);
+        self.reset_reply();
+        self.turn_done.store(true, Ordering::SeqCst);
+        self.audio.begin_reply();
+        self.speak_all(vec![text.to_string()]);
+        if !self.queued_speech.load(Ordering::SeqCst) {
+            self.agent.set_state(AgentState::Idle);
+        }
+    }
+
+    /// Load a past conversation's cards back onto the canvas.
+    pub fn open_conversation(&self, id: i64) -> Result<usize, String> {
+        let cards: Vec<serde_json::Value> = self
+            .memory
+            .cards(id)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|c| c.payload)
+            .collect();
+        let n = cards.len();
+        let _ = self.app.emit(workspace::EV_CARDS_LOAD, cards);
+        Ok(n)
+    }
+
+    /// Every 30 s: run what is due. Missed runs (asleep, app closed) happen once.
+    async fn schedule_loop(self: Arc<Self>) {
+        loop {
+            match self.scheduler.take_due(chrono::Local::now()) {
+                Ok(due) => {
+                    for s in due {
+                        let busy = self.platform.in_call_or_sharing();
+                        let Ok(cv) = self.scheduler.open_run(&s) else {
+                            continue;
+                        };
+                        *self.conv.lock().expect("conv") = Some(cv);
+                        if Delivery::for_busy(busy) == Delivery::CardOnly {
+                            self.muted.store(true, Ordering::SeqCst);
+                        }
+                        self.reset_reply();
+                        self.turn_done.store(false, Ordering::SeqCst);
+                        *self.last_user.lock().expect("last_user") = s.name.clone();
+                        self.agent
+                            .submit(UserTurn {
+                                text: s.agent.prompt.clone(),
+                                source: markon_agent::TurnSource::Schedule,
+                            })
+                            .await;
+                        // The next thing the user says starts a fresh conversation.
+                        *self.conv.lock().expect("conv") = None;
+                    }
+                }
+                Err(e) => eprintln!("[scheduler] {e}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
     }
 
     pub fn hide(&self) {

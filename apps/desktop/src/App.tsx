@@ -5,6 +5,7 @@ import { Canvas } from './canvas/Canvas';
 import { layout } from './canvas/layout';
 import { useCards } from './canvas/useCards';
 import { Controls } from './hud/Controls';
+import { HistoryPanel } from './hud/HistoryPanel';
 import { MicMeter } from './hud/MicMeter';
 import { Notices } from './hud/Notices';
 import { type PermissionAsk, PermissionDialog } from './hud/PermissionDialog';
@@ -31,6 +32,7 @@ export function App() {
   const [asks, setAsks] = useState<PermissionAsk[]>([]);
   const [big, setBig] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [history, setHistory] = useState(false);
 
   // HUD centre is 800 px on a large screen. The core never moves; with cards it shrinks a little.
   const coreMax = Math.round(Math.min(800, Math.min(width, height) * 0.78));
@@ -96,12 +98,13 @@ export function App() {
     setAsks((a) => a.slice(1));
   };
 
-  const escState = useRef({ quitting, asks: asks.length, cards: cards.length, clearAll });
-  escState.current = { quitting, asks: asks.length, cards: cards.length, clearAll };
+  const escState = useRef({ quitting, asks: asks.length, cards: cards.length, clearAll, history });
+  escState.current = { quitting, asks: asks.length, cards: cards.length, clearAll, history };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = escState.current;
       if (e.key !== 'Escape' || s.quitting || s.asks || e.defaultPrevented) return;
+      if (s.history) return setHistory(false);
       // Esc clears the canvas when it has cards, otherwise hides to the tray.
       if (s.cards) s.clearAll();
       else void call('hide_window');
@@ -127,13 +130,14 @@ export function App() {
       <Canvas cards={cards} lay={lay} big={big} focusId={focusId} onOverflowPick={toFront} />
       <Notices view={view} />
       <Controls
-        onHistory={() => void call('open_history')}
+        onHistory={() => setHistory((h) => !h)}
         onTidy={tidy}
         onClear={clearAll}
         onCamera={() => void call('capture_window')}
       />
       <MicMeter level={view.level} who={view.levelWho} line={view.line} />
       <TextInput ref={input} />
+      {history ? <HistoryPanel onClose={() => setHistory(false)} /> : null}
       {asks[0] ? <PermissionDialog key={asks[0].id} ask={asks[0]} onAnswer={answer} /> : null}
       {quitting ? (
         <QuitDialog onQuit={() => void call('quit_app')} onStay={() => setQuitting(false)} />
