@@ -1,0 +1,169 @@
+//! Everything OS-specific sits behind [`Platform`]. Only macOS is implemented;
+//! another OS is a new impl of the same trait.
+use std::path::PathBuf;
+
+/// Keychain service name for every Markon secret.
+pub const KEYCHAIN_SERVICE: &str = "com.markon.desktop";
+
+/// Keychain account names.
+pub mod accounts {
+    pub const ANTHROPIC: &str = "anthropic-api-key";
+    pub const OPENROUTER: &str = "openrouter-api-key";
+    pub const RELAY_TOKEN: &str = "relay-token";
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PlatformError {
+    #[error("keychain: {0}")]
+    Keychain(String),
+    #[error("cannot open {0}")]
+    Open(String),
+    #[error("refused: {0}")]
+    Refused(String),
+}
+
+pub trait Platform: Send + Sync {
+    /// `~/.markon`: settings, database, models, cache, logs.
+    fn data_dir(&self) -> PathBuf;
+    fn secret_get(&self, account: &str) -> Result<Option<String>, PlatformError>;
+    fn secret_set(&self, account: &str, value: &str) -> Result<(), PlatformError>;
+    fn secret_delete(&self, account: &str) -> Result<(), PlatformError>;
+    /// Open a web URL in the default browser.
+    fn open_url(&self, url: &str) -> Result<(), PlatformError>;
+    /// Open an installed application by name.
+    fn open_app(&self, name: &str) -> Result<(), PlatformError>;
+    /// Deep link to the microphone privacy setting.
+    fn open_mic_settings(&self) -> Result<(), PlatformError>;
+    /// True while the user is likely in a call or sharing the screen (scheduled agents stay quiet).
+    fn in_call_or_sharing(&self) -> bool;
+}
+
+/// Only web and mail links; never `file:` or custom schemes that could launch arbitrary handlers.
+pub fn is_safe_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:"))
+        && !url.chars().any(|c| c.is_control())
+}
+
+/// App names are plain words: no paths, no flags.
+pub fn is_safe_app_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('-')
+        && name.chars().all(|c| c.is_alphanumeric() || " .-_&".contains(c))
+}
+
+pub fn current() -> impl Platform {
+    MacOs
+}
+
+pub struct MacOs;
+
+fn entry(account: &str) -> Result<keyring::Entry, PlatformError> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| PlatformError::Keychain(e.to_string()))
+}
+
+fn run_open(args: &[&str]) -> Result<(), PlatformError> {
+    let ok = std::process::Command::new("/usr/bin/open").args(args).status().map(|s| s.success()).unwrap_or(false);
+    if ok { Ok(()) } else { Err(PlatformError::Open(args.join(" "))) }
+}
+
+/// Processes that mean a call or screen share is in progress.
+const CALL_PROCESSES: &[&str] = &["CptHost", "zoom.us", "FaceTime", "Microsoft Teams", "MSTeams", "Webex", "Slack Huddle"];
+
+impl Platform for MacOs {
+    fn data_dir(&self) -> PathBuf {
+        std::env::var_os("MARKON_HOME").map(PathBuf::from).unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into())).join(".markon")
+        })
+    }
+
+    fn secret_get(&self, account: &str) -> Result<Option<String>, PlatformError> {
+        match entry(account)?.get_password() {
+            Ok(v) => Ok(Some(v)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(PlatformError::Keychain(e.to_string())),
+        }
+    }
+
+    fn secret_set(&self, account: &str, value: &str) -> Result<(), PlatformError> {
+        entry(account)?.set_password(value).map_err(|e| PlatformError::Keychain(e.to_string()))
+    }
+
+    fn secret_delete(&self, account: &str) -> Result<(), PlatformError> {
+        match entry(account)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(PlatformError::Keychain(e.to_string())),
+        }
+    }
+
+    fn open_url(&self, url: &str) -> Result<(), PlatformError> {
+        if !is_safe_url(url) {
+            return Err(PlatformError::Refused(format!("not a web link: {url}")));
+        }
+        run_open(&[url])
+    }
+
+    fn open_app(&self, name: &str) -> Result<(), PlatformError> {
+        if !is_safe_app_name(name) {
+            return Err(PlatformError::Refused(format!("not an app name: {name}")));
+        }
+        run_open(&["-a", name])
+    }
+
+    fn open_mic_settings(&self) -> Result<(), PlatformError> {
+        run_open(&["x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"])
+    }
+
+    fn in_call_or_sharing(&self) -> bool {
+        // shortcut: process-name heuristic; upgrade to the CoreAudio "device in use" property when it misfires.
+        let Ok(out) = std::process::Command::new("/bin/ps").args(["-axo", "comm"]).output() else {
+            return false;
+        };
+        let list = String::from_utf8_lossy(&out.stdout);
+        list.lines().any(|l| CALL_PROCESSES.iter().any(|p| l.ends_with(p)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_web_links_open() {
+        assert!(is_safe_url("https://example.com/a?b=1"));
+        assert!(is_safe_url("mailto:x@example.com"));
+        assert!(!is_safe_url("file:///etc/passwd"));
+        assert!(!is_safe_url("javascript:alert(1)"));
+        assert!(!is_safe_url("vscode://x"));
+        assert!(!is_safe_url("https://a\nb"));
+    }
+
+    #[test]
+    fn app_names_cannot_smuggle_flags_or_paths() {
+        assert!(is_safe_app_name("Safari"));
+        assert!(is_safe_app_name("Visual Studio Code"));
+        assert!(!is_safe_app_name("-n"));
+        assert!(!is_safe_app_name("/System/Applications/Calculator.app"));
+        assert!(!is_safe_app_name("Calc;rm -rf"));
+    }
+
+    #[test]
+    fn data_dir_is_under_home() {
+        if std::env::var_os("MARKON_HOME").is_none() {
+            assert!(MacOs.data_dir().ends_with(".markon"));
+        }
+    }
+
+    /// Touches the real login keychain; run with `cargo test -p markon-platform -- --ignored`.
+    #[test]
+    #[ignore]
+    fn keychain_round_trip() {
+        let p = MacOs;
+        let acct = "markon-test-account";
+        p.secret_set(acct, "value-1").unwrap();
+        assert_eq!(p.secret_get(acct).unwrap().as_deref(), Some("value-1"));
+        p.secret_delete(acct).unwrap();
+        assert_eq!(p.secret_get(acct).unwrap(), None);
+    }
+}
