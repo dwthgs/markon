@@ -30,7 +30,10 @@ pub struct Message {
 
 impl Message {
     pub fn user_text(text: &str) -> Self {
-        Self { role: Role::User, content: vec![serde_json::json!({"type": "text", "text": text})] }
+        Self {
+            role: Role::User,
+            content: vec![serde_json::json!({"type": "text", "text": text})],
+        }
     }
     pub fn tool_results(results: Vec<ToolResult>) -> Self {
         Self {
@@ -91,10 +94,17 @@ impl StopReason {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatDelta {
     Text(String),
-    ToolCall { id: String, name: String, input: Value },
+    ToolCall {
+        id: String,
+        name: String,
+        input: Value,
+    },
     /// A finished assistant content block, to append to the history verbatim.
     Block(Value),
-    Usage { input_tokens: u64, output_tokens: u64 },
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+    },
     Stop(StopReason),
 }
 
@@ -141,8 +151,16 @@ impl ProviderError {
 
     fn from_status(status: u16, body: &str, retry_after_s: Option<u64>) -> Self {
         let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-        let message = v["error"]["message"].as_str().unwrap_or(body).chars().take(300).collect::<String>();
-        let code = v["error"]["code"].as_str().or(v["code"].as_str()).unwrap_or_default();
+        let message = v["error"]["message"]
+            .as_str()
+            .unwrap_or(body)
+            .chars()
+            .take(300)
+            .collect::<String>();
+        let code = v["error"]["code"]
+            .as_str()
+            .or(v["code"].as_str())
+            .unwrap_or_default();
         match status {
             401 | 403 => Self::Auth,
             402 if code.starts_with("quota") => Self::QuotaExhausted { code: code.into() },

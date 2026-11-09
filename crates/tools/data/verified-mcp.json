@@ -1,10 +1,45 @@
 {
   "note": "Verified list. Only web-hosted (HTTP) servers. Each entry needs the user's own sign-in; OAuth sign-in is not wired in this build.",
   "servers": [
-    { "id": "github", "name": "GitHub", "url": "https://api.githubcopilot.com/mcp/", "auth": "oauth", "available": false, "reason": "needs GitHub sign-in (OAuth), not wired yet" },
-    { "id": "notion", "name": "Notion", "url": "https://mcp.notion.com/mcp", "auth": "oauth", "available": false, "reason": "needs Notion sign-in (OAuth), not wired yet" },
-    { "id": "gmail", "name": "Gmail", "url": null, "auth": "oauth", "available": false, "reason": "no verified web-hosted server" },
-    { "id": "google-calendar", "name": "Google Calendar", "url": null, "auth": "oauth", "available": false, "reason": "no verified web-hosted server" },
-    { "id": "slack", "name": "Slack", "url": null, "auth": "oauth", "available": false, "reason": "no verified web-hosted server" }
+    {
+      "id": "github",
+      "name": "GitHub",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": "oauth",
+      "available": false,
+      "reason": "needs GitHub sign-in (OAuth), not wired yet"
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": "oauth",
+      "available": false,
+      "reason": "needs Notion sign-in (OAuth), not wired yet"
+    },
+    {
+      "id": "gmail",
+      "name": "Gmail",
+      "url": null,
+      "auth": "oauth",
+      "available": false,
+      "reason": "no verified web-hosted server"
+    },
+    {
+      "id": "google-calendar",
+      "name": "Google Calendar",
+      "url": null,
+      "auth": "oauth",
+      "available": false,
+      "reason": "no verified web-hosted server"
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "url": null,
+      "auth": "oauth",
+      "available": false,
+      "reason": "no verified web-hosted server"
+    }
   ]
 }

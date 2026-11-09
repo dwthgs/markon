@@ -29,10 +29,18 @@ impl MessagesClient {
             .connect_timeout(Duration::from_secs(10))
             .build()
             .expect("http client");
-        Self { http, base_url: base_url.into(), auth, fallbacks }
+        Self {
+            http,
+            base_url: base_url.into(),
+            auth,
+            fallbacks,
+        }
     }
 
-    fn authed(&self, rb: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder, ProviderError> {
+    fn authed(
+        &self,
+        rb: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder, ProviderError> {
         let rb = rb.header("anthropic-version", API_VERSION);
         Ok(match &self.auth {
             Auth::ApiKey(k) => rb.header("x-api-key", k().ok_or(ProviderError::NoKey)?),
@@ -62,7 +70,11 @@ impl MessagesClient {
         let url = format!("{}/v1/messages", self.base_url);
         let body = self.body(&req);
         let rb = self.authed(self.http.post(url).json(&body)).map(|rb| {
-            if self.fallbacks { rb.header("anthropic-beta", FALLBACK_BETA) } else { rb }
+            if self.fallbacks {
+                rb.header("anthropic-beta", FALLBACK_BETA)
+            } else {
+                rb
+            }
         });
         tokio::spawn(async move {
             let rb = match rb {
@@ -80,8 +92,15 @@ impl MessagesClient {
     }
 
     pub async fn list_models(&self) -> Result<Value, ProviderError> {
-        let rb = self.authed(self.http.get(format!("{}/v1/models", self.base_url)).timeout(Duration::from_secs(3)))?;
-        let resp = rb.send().await.map_err(|e| ProviderError::Network(e.without_url().to_string()))?;
+        let rb = self.authed(
+            self.http
+                .get(format!("{}/v1/models", self.base_url))
+                .timeout(Duration::from_secs(3)),
+        )?;
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ProviderError::Network(e.without_url().to_string()))?;
         let status = resp.status().as_u16();
         let ra = retry_after(resp.headers());
         let text = resp.text().await.unwrap_or_default();
@@ -105,7 +124,10 @@ async fn run_stream(
     tx: &mpsc::Sender<Result<ChatDelta, ProviderError>>,
 ) -> Result<(), ProviderError> {
     // without_url keeps request URLs (and anything in them) out of error text.
-    let mut resp = rb.send().await.map_err(|e| ProviderError::Network(e.without_url().to_string()))?;
+    let mut resp = rb
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.without_url().to_string()))?;
     let status = resp.status().as_u16();
     if status >= 400 {
         let ra = retry_after(resp.headers());
@@ -117,14 +139,27 @@ async fn run_stream(
     let (mut input_tokens, mut output_tokens) = (0u64, 0u64);
     let mut stop = None;
     let send = |d| tx.send(Ok(d));
-    while let Some(chunk) = resp.chunk().await.map_err(|e| ProviderError::Network(e.without_url().to_string()))? {
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| ProviderError::Network(e.without_url().to_string()))?
+    {
         for ev in parser.push(&chunk) {
-            let v: Value = serde_json::from_str(&ev.data).map_err(|e| ProviderError::Parse(e.to_string()))?;
+            let v: Value =
+                serde_json::from_str(&ev.data).map_err(|e| ProviderError::Parse(e.to_string()))?;
             match v["type"].as_str().unwrap_or(&ev.event) {
-                "message_start" => input_tokens = v["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0),
+                "message_start" => {
+                    input_tokens = v["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0)
+                }
                 "content_block_start" => {
                     let i = v["index"].as_u64().unwrap_or(0);
-                    blocks.insert(i, Block { value: v["content_block"].clone(), ..Default::default() });
+                    blocks.insert(
+                        i,
+                        Block {
+                            value: v["content_block"].clone(),
+                            ..Default::default()
+                        },
+                    );
                 }
                 "content_block_delta" => {
                     let i = v["index"].as_u64().unwrap_or(0);
@@ -138,15 +173,23 @@ async fn run_stream(
                                 return Ok(()); // receiver dropped: the turn was cancelled
                             }
                         }
-                        "input_json_delta" => b.json.push_str(d["partial_json"].as_str().unwrap_or_default()),
-                        "thinking_delta" => b.text.push_str(d["thinking"].as_str().unwrap_or_default()),
-                        "signature_delta" => b.signature.push_str(d["signature"].as_str().unwrap_or_default()),
+                        "input_json_delta" => b
+                            .json
+                            .push_str(d["partial_json"].as_str().unwrap_or_default()),
+                        "thinking_delta" => {
+                            b.text.push_str(d["thinking"].as_str().unwrap_or_default())
+                        }
+                        "signature_delta" => b
+                            .signature
+                            .push_str(d["signature"].as_str().unwrap_or_default()),
                         _ => {}
                     }
                 }
                 "content_block_stop" => {
                     let i = v["index"].as_u64().unwrap_or(0);
-                    let Some(mut b) = blocks.remove(&i) else { continue };
+                    let Some(mut b) = blocks.remove(&i) else {
+                        continue;
+                    };
                     match b.value["type"].as_str().unwrap_or_default() {
                         "text" => b.value["text"] = json!(b.text),
                         "thinking" => {
@@ -176,26 +219,42 @@ async fn run_stream(
                     if let Some(s) = v["delta"]["stop_reason"].as_str() {
                         stop = Some(StopReason::parse(s));
                     }
-                    output_tokens = v["usage"]["output_tokens"].as_u64().unwrap_or(output_tokens);
+                    output_tokens = v["usage"]["output_tokens"]
+                        .as_u64()
+                        .unwrap_or(output_tokens);
                 }
                 "message_stop" => {
-                    send(ChatDelta::Usage { input_tokens, output_tokens }).await.ok();
-                    send(ChatDelta::Stop(stop.take().unwrap_or(StopReason::EndTurn))).await.ok();
+                    send(ChatDelta::Usage {
+                        input_tokens,
+                        output_tokens,
+                    })
+                    .await
+                    .ok();
+                    send(ChatDelta::Stop(stop.take().unwrap_or(StopReason::EndTurn)))
+                        .await
+                        .ok();
                     return Ok(());
                 }
                 "error" => {
                     let kind = v["error"]["type"].as_str().unwrap_or_default();
                     return Err(match kind {
                         "overloaded_error" => ProviderError::Overloaded,
-                        "rate_limit_error" => ProviderError::RateLimited { retry_after_s: None },
-                        _ => ProviderError::Http { status: 500, message: v["error"]["message"].as_str().unwrap_or(kind).into() },
+                        "rate_limit_error" => ProviderError::RateLimited {
+                            retry_after_s: None,
+                        },
+                        _ => ProviderError::Http {
+                            status: 500,
+                            message: v["error"]["message"].as_str().unwrap_or(kind).into(),
+                        },
                     });
                 }
                 _ => {}
             }
         }
     }
-    Err(ProviderError::Network("stream ended before the reply finished".into()))
+    Err(ProviderError::Network(
+        "stream ended before the reply finished".into(),
+    ))
 }
 
 /// Route A: the user's own Anthropic key from the keychain.
@@ -208,7 +267,9 @@ impl AnthropicDirect {
         Self::with_base_url("https://api.anthropic.com", key)
     }
     pub fn with_base_url(base_url: &str, key: KeySource) -> Self {
-        Self { client: MessagesClient::new(base_url, Auth::ApiKey(key), true) }
+        Self {
+            client: MessagesClient::new(base_url, Auth::ApiKey(key), true),
+        }
     }
 }
 
@@ -220,10 +281,17 @@ impl ModelProvider for AnthropicDirect {
         self.client.stream(req)
     }
     fn models(&self) -> Vec<ModelInfo> {
-        [("claude-opus-5-5", "Claude Opus 5.5"), ("claude-sonnet-5-5", "Claude Sonnet 5.5"), ("claude-haiku-5-5", "Claude Haiku 5.5")]
-            .into_iter()
-            .map(|(id, name)| ModelInfo { id: id.into(), name: name.into() })
-            .collect()
+        [
+            ("claude-opus-5-5", "Claude Opus 5.5"),
+            ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+            ("claude-haiku-5-5", "Claude Haiku 5.5"),
+        ]
+        .into_iter()
+        .map(|(id, name)| ModelInfo {
+            id: id.into(),
+            name: name.into(),
+        })
+        .collect()
     }
     fn default_model(&self) -> String {
         DEFAULT_MODEL.into()
@@ -232,7 +300,11 @@ impl ModelProvider for AnthropicDirect {
         Box::pin(async move {
             self.client.list_models().await?;
             // The Anthropic API does not expose plan or balance.
-            Ok(Account { route: "anthropic".into(), plan: None, balance: None })
+            Ok(Account {
+                route: "anthropic".into(),
+                plan: None,
+                balance: None,
+            })
         })
     }
 }

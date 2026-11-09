@@ -20,7 +20,10 @@ impl SseParser {
         let mut out = Vec::new();
         while let Some(end) = self.buf.find("\n\n") {
             let block: String = self.buf.drain(..end + 2).collect();
-            let mut ev = SseEvent { event: "message".into(), data: String::new() };
+            let mut ev = SseEvent {
+                event: "message".into(),
+                data: String::new(),
+            };
             for line in block.lines() {
                 if let Some(v) = line.strip_prefix("event:") {
                     ev.event = v.trim().into();
@@ -48,9 +51,18 @@ mod tests {
         let mut p = SseParser::default();
         assert!(p.push(b"event: ping\nda").is_empty());
         let evs = p.push(b"ta: {}\n\nevent: x\ndata: 1\r\n\r\n");
-        assert_eq!(evs, vec![
-            SseEvent { event: "ping".into(), data: "{}".into() },
-            SseEvent { event: "x".into(), data: "1".into() }
-        ]);
+        assert_eq!(
+            evs,
+            vec![
+                SseEvent {
+                    event: "ping".into(),
+                    data: "{}".into()
+                },
+                SseEvent {
+                    event: "x".into(),
+                    data: "1".into()
+                }
+            ]
+        );
     }
 }
