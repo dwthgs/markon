@@ -11,10 +11,10 @@
     },
     {
       "id": "kokoro-v1",
-      "path": "kokoro-v1.onnx",
-      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model.onnx",
-      "size": 325532232,
-      "sha256": "8fbea51ea711f2af382e88c833d9e288c6dc82ce5e98421ea61c058ce21a34cb",
+      "path": "kokoro-v1-q8f16.onnx",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_q8f16.onnx",
+      "size": 86033585,
+      "sha256": "04c658aec1b6008857c2ad10f8c589d4180d0ec427e7e6118ceb487e215c3cd0",
       "license": "Apache-2.0"
     },
     {
@@ -31,6 +31,22 @@
       "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/bf_isabella.bin",
       "size": 522240,
       "sha256": "3754352c4aaa46d17f27654ab7518d65b62ad6163a0f55a5f4330c2da2c4e94f",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "g2p-gb-gold",
+      "path": "g2p/gb_gold.json",
+      "url": "https://raw.githubusercontent.com/hexgrad/misaki/fba1236595f2d2bf21d414ba6e57d25256afada3/misaki/data/gb_gold.json",
+      "size": 2838552,
+      "sha256": "29e62f4b60261c88f7f3c2c7811ca3825978948090b72d2b27d565b729282f71",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "g2p-gb-silver",
+      "path": "g2p/gb_silver.json",
+      "url": "https://raw.githubusercontent.com/hexgrad/misaki/fba1236595f2d2bf21d414ba6e57d25256afada3/misaki/data/gb_silver.json",
+      "size": 3663898,
+      "sha256": "48131e2d92ccc41655f4543e87e0f938e71463eb5a54be7f0693bb712ebb6bce",
       "license": "Apache-2.0"
     }
   ]
