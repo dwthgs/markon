@@ -103,12 +103,31 @@ export function App() {
     setAsks((a) => a.slice(1));
   };
 
-  const escState = useRef({ quitting, asks: asks.length, cards: cards.length, clearAll, history, settings });
-  escState.current = { quitting, asks: asks.length, cards: cards.length, clearAll, history, settings };
+  const escState = useRef({
+    quitting,
+    asks: asks.length,
+    cards: cards.length,
+    clearAll,
+    history,
+    settings,
+    deny: () => answer(false),
+  });
+  escState.current = {
+    quitting,
+    asks: asks.length,
+    cards: cards.length,
+    clearAll,
+    history,
+    settings,
+    deny: () => answer(false),
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = escState.current;
-      if (e.key !== 'Escape' || s.quitting || s.asks || e.defaultPrevented) return;
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // Esc closes the top layer first, even before focus has moved into it.
+      if (s.asks) return s.deny();
+      if (s.quitting) return setQuitting(false);
       if (s.history) return setHistory(false);
       if (s.settings) return setSettings(false);
       // Esc clears the canvas when it has cards, otherwise hides to the tray.
@@ -143,7 +162,7 @@ export function App() {
       >
         {LABEL[view.state]}
       </div>
-      <Canvas cards={cards} lay={lay} big={big} focusId={focusId} onOverflowPick={toFront} />
+      <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} />
       <Notices view={view} />
       <Controls
         onHistory={() => setHistory((h) => !h)}

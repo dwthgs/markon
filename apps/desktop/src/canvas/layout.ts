@@ -13,6 +13,8 @@ export interface Layout {
   left: string[];
   right: string[];
   overflow: string[];
+  /** Cards shown at double height (only when two slots fit). */
+  big: Set<string>;
 }
 
 /**
@@ -39,17 +41,20 @@ export function layout(
         { ids: [], used: 0 },
       ];
   const overflow: string[] = [];
+  const placedBig = new Set<string>();
   const turns = new Map<number, Card[]>();
   for (const c of cards) turns.set(c.turn_id, [...(turns.get(c.turn_id) ?? []), c]);
   for (const group of turns.values()) {
+    // A turn's cards stack on one side: the side with most room when the turn starts.
+    const order = [...zones].sort((a, b) => a.used - b.used);
     for (const c of group) {
-      const need = big.has(c.id) ? 2 : 1;
-      // Keep a turn's cards on the side that has most room when the turn starts.
-      const order = [...zones].sort((a, b) => a.used - b.used);
+      // A card made bigger still fits as a normal one when the screen is short.
+      const need = big.has(c.id) && slots >= 2 ? 2 : 1;
       const z = order.find((z) => z.used + need <= slots);
       if (z) {
         z.ids.push(c.id);
         z.used += need;
+        if (need === 2) placedBig.add(c.id);
       } else overflow.push(c.id);
     }
   }
@@ -60,5 +65,6 @@ export function layout(
     left: narrow ? [] : (zones[0]?.ids ?? []),
     right: narrow ? (zones[0]?.ids ?? []) : (zones[1]?.ids ?? []),
     overflow,
+    big: placedBig,
   };
 }

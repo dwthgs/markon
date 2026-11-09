@@ -6,12 +6,11 @@ import type { Card } from './types';
 interface Props {
   cards: Card[];
   lay: Layout;
-  big: Set<string>;
   focusId: string | null;
   onOverflowPick: (id: string) => void;
 }
 
-export function Canvas({ cards, lay, big, focusId, onOverflowPick }: Props) {
+export function Canvas({ cards, lay, focusId, onOverflowPick }: Props) {
   const byId = new Map(cards.map((c) => [c.id, c]));
   const refs = useRef(new Map<string, HTMLElement>());
   useEffect(() => {
@@ -28,7 +27,7 @@ export function Canvas({ cards, lay, big, focusId, onOverflowPick }: Props) {
             <CardView
               key={id}
               card={c}
-              big={big.has(id)}
+              big={lay.big.has(id)}
               focusRef={(el) => {
                 if (el) refs.current.set(id, el);
                 else refs.current.delete(id);
