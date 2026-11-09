@@ -2,6 +2,7 @@
 mod core;
 mod remember;
 mod settings;
+mod setup;
 mod tray;
 mod voice_commands;
 mod workspace;
@@ -24,7 +25,24 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
-type CoreState = Arc<Core>;
+pub(crate) type CoreState = Arc<Core>;
+
+/// Swap the push-to-talk shortcut. The old one stays if the new one cannot be registered.
+pub(crate) fn register_hotkey(app: &AppHandle, old: &str, new: &str) -> Result<(), String> {
+    let next: Shortcut = new
+        .parse()
+        .map_err(|e| format!("{new} is not a valid shortcut: {e}"))?;
+    let gs = app.global_shortcut();
+    if let Ok(prev) = old.parse::<Shortcut>() {
+        let _ = gs.unregister(prev);
+    }
+    gs.register(next).map_err(|e| {
+        if let Ok(prev) = old.parse::<Shortcut>() {
+            let _ = gs.register(prev);
+        }
+        format!("cannot use {new}: {e}")
+    })
+}
 
 #[tauri::command]
 fn status(core: State<'_, CoreState>) -> core::Status {
@@ -193,6 +211,16 @@ pub fn run() {
             history_list,
             open_conversation,
             bring_back,
+            setup::settings_get,
+            setup::settings_set,
+            setup::set_secret,
+            setup::delete_secret,
+            setup::validate_route,
+            setup::preview_voice,
+            setup::pick_folder,
+            setup::request_mic,
+            setup::export_memory,
+            setup::wipe_all,
             report_fps
         ])
         .run(tauri::generate_context!())

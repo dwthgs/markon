@@ -26,6 +26,7 @@ export function installFakeTauri() {
     listening: false,
     hotkey: 'Alt+Space',
     onboarded: true,
+    reduced_motion: false,
     version: '0.1.0',
   };
   const params = new URLSearchParams(location.search);
@@ -33,7 +34,8 @@ export function installFakeTauri() {
   window.__e2e = {
     calls: [],
     status,
-    responses: {},
+    // Tests can seed responses before the app loads with page.addInitScript.
+    responses: (window as unknown as { __e2eResponses?: Record<string, unknown> }).__e2eResponses ?? {},
     emit: (event, payload) => emit(event, payload),
   };
   mockIPC(

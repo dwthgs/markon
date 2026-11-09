@@ -14,6 +14,7 @@ export interface Status {
   listening: boolean;
   hotkey: string;
   onboarded: boolean;
+  reduced_motion: boolean;
   version: string;
 }
 

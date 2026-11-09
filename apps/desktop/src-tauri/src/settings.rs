@@ -25,6 +25,10 @@ pub struct Settings {
     pub approved_folders: Vec<PathBuf>,
     pub onboarded: bool,
     pub reduced_motion: bool,
+    /// Random id for the free-trial relay. Not derived from hardware.
+    pub device_id: Option<String>,
+    /// Free-trial relay base URL. Empty until the relay is deployed.
+    pub relay_url: String,
 }
 
 impl Default for Settings {
@@ -37,6 +41,8 @@ impl Default for Settings {
             approved_folders: Vec::new(),
             onboarded: false,
             reduced_motion: false,
+            device_id: None,
+            relay_url: String::new(),
         }
     }
 }
@@ -70,6 +76,16 @@ impl Settings {
         )?;
         std::fs::rename(tmp, p)
     }
+}
+
+/// 128 random bits from the OS, as hex.
+pub fn random_id() -> String {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut b);
+    }
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 #[cfg(test)]

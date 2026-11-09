@@ -64,6 +64,7 @@ pub struct Status {
     pub listening: bool,
     pub hotkey: String,
     pub onboarded: bool,
+    pub reduced_motion: bool,
     pub version: String,
 }
 
@@ -78,12 +79,39 @@ fn persona(voice: Voice) -> String {
     )
 }
 
-pub fn provider_for(route: Route, platform: Arc<MacOs>) -> Arc<dyn ModelProvider> {
-    let p = platform.clone();
-    let key: KeySource = Arc::new(move || p.secret_get(accounts::ANTHROPIC).ok().flatten());
-    match route {
-        // Routes B and C fall back to route A for now.
-        Route::Anthropic | Route::OpenRouter | Route::Relay => Arc::new(AnthropicDirect::new(key)),
+pub fn provider_for(settings: &Settings, platform: Arc<MacOs>) -> Arc<dyn ModelProvider> {
+    let key = |account: &'static str| -> KeySource {
+        let p = platform.clone();
+        Arc::new(move || p.secret_get(account).ok().flatten())
+    };
+    match settings.route {
+        Route::Anthropic => Arc::new(AnthropicDirect::new(key(accounts::ANTHROPIC))),
+        Route::OpenRouter => Arc::new(markon_provider::openrouter::OpenRouter::new(key(
+            accounts::OPENROUTER,
+        ))),
+        Route::Relay => {
+            let p = platform.clone();
+            let store: markon_provider::relay::TokenStore = Arc::new(move |t| {
+                let _ = match t {
+                    Some(t) => p.secret_set(accounts::RELAY_TOKEN, t),
+                    None => p.secret_delete(accounts::RELAY_TOKEN),
+                };
+            });
+            let url = if settings.relay_url.is_empty() {
+                "http://127.0.0.1:9".into()
+            } else {
+                settings.relay_url.clone()
+            };
+            Arc::new(markon_provider::relay::Relay::new(
+                &url,
+                settings
+                    .device_id
+                    .as_deref()
+                    .unwrap_or("unregistered-device"),
+                key(accounts::RELAY_TOKEN),
+                store,
+            ))
+        }
     }
 }
 
@@ -91,7 +119,11 @@ impl Core {
     pub fn start(app: AppHandle) -> Arc<Self> {
         let platform = Arc::new(markon_platform::MacOs);
         let dir = platform.data_dir();
-        let settings = Settings::load(&dir);
+        let mut settings = Settings::load(&dir);
+        if settings.device_id.is_none() {
+            settings.device_id = Some(crate::settings::random_id());
+            let _ = settings.save(&dir);
+        }
         if !Settings::path(&dir).exists()
             && let Err(e) = settings.save(&dir)
         {
@@ -161,7 +193,7 @@ impl Core {
             card_sink.clone(),
         );
         workspace::start_mcp(tools.clone(), &dir.join("mcp.json"));
-        let provider = provider_for(settings.route, platform.clone());
+        let provider = provider_for(&settings, platform.clone());
         let (mut agent, mut rx) = Agent::new(
             provider,
             Arc::new(workspace::shared(&tools)),
@@ -233,17 +265,27 @@ impl Core {
                 .lock()
                 .map(|n| n.clone())
                 .unwrap_or_default(),
-            has_key: self
-                .platform
-                .secret_get(accounts::ANTHROPIC)
-                .ok()
-                .flatten()
-                .is_some(),
+            has_key: match s.route {
+                Route::Anthropic => self
+                    .platform
+                    .secret_get(accounts::ANTHROPIC)
+                    .ok()
+                    .flatten()
+                    .is_some(),
+                Route::OpenRouter => self
+                    .platform
+                    .secret_get(accounts::OPENROUTER)
+                    .ok()
+                    .flatten()
+                    .is_some(),
+                Route::Relay => true,
+            },
             voice: s.voice,
             route: s.route,
             listening: self.audio.is_listening(),
             hotkey: s.hotkey.clone(),
             onboarded: s.onboarded,
+            reduced_motion: s.reduced_motion,
             version: env!("CARGO_PKG_VERSION").into(),
         }
     }

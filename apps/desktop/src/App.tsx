@@ -8,8 +8,10 @@ import { Controls } from './hud/Controls';
 import { HistoryPanel } from './hud/HistoryPanel';
 import { MicMeter } from './hud/MicMeter';
 import { Notices } from './hud/Notices';
+import { Onboarding } from './hud/Onboarding';
 import { type PermissionAsk, PermissionDialog } from './hud/PermissionDialog';
 import { QuitDialog } from './hud/QuitDialog';
+import { SettingsPanel } from './hud/SettingsPanel';
 import { TextInput } from './hud/TextInput';
 import { useCore } from './lib/core';
 import { call, inTauri } from './lib/tauri';
@@ -33,6 +35,8 @@ export function App() {
   const [big, setBig] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState<string | null>(null);
   const [history, setHistory] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [onboardingDone, setOnboardingDone] = useState(false);
 
   // HUD centre is 800 px on a large screen. The core never moves; with cards it shrinks a little.
   const coreMax = Math.round(Math.min(800, Math.min(width, height) * 0.78));
@@ -60,6 +64,7 @@ export function App() {
   const command = useCallback(
     (cmd: string, arg = '') => {
       if (cmd === 'quit') setQuitting(true);
+      else if (cmd === 'settings') setSettings(true);
       else if (cmd === 'clear') clearAll();
       else if (cmd === 'tidy') tidy();
       else if (cmd === 'focus') focusOn(arg);
@@ -98,13 +103,14 @@ export function App() {
     setAsks((a) => a.slice(1));
   };
 
-  const escState = useRef({ quitting, asks: asks.length, cards: cards.length, clearAll, history });
-  escState.current = { quitting, asks: asks.length, cards: cards.length, clearAll, history };
+  const escState = useRef({ quitting, asks: asks.length, cards: cards.length, clearAll, history, settings });
+  escState.current = { quitting, asks: asks.length, cards: cards.length, clearAll, history, settings };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = escState.current;
       if (e.key !== 'Escape' || s.quitting || s.asks || e.defaultPrevented) return;
       if (s.history) return setHistory(false);
+      if (s.settings) return setSettings(false);
       // Esc clears the canvas when it has cards, otherwise hides to the tray.
       if (s.cards) s.clearAll();
       else void call('hide_window');
@@ -114,9 +120,19 @@ export function App() {
   }, []);
 
   return (
-    <main className="fixed inset-0 overflow-hidden bg-[radial-gradient(70%_60%_at_50%_45%,#071624_0%,#03060c_70%)]">
+    <main
+      data-reduced-motion={view.status?.reduced_motion ?? false}
+      className="fixed inset-0 overflow-hidden bg-[radial-gradient(70%_60%_at_50%_45%,#071624_0%,#03060c_70%)]"
+    >
       <div className="absolute inset-0 grid place-items-center">
-        <VoiceCore variant="prime" state={view.state} size={size} feedRef={feed} demo={!inTauri()} />
+        <VoiceCore
+          variant="prime"
+          state={view.state}
+          size={size}
+          feedRef={feed}
+          demo={!inTauri()}
+          {...(view.status?.reduced_motion ? { reducedMotion: true } : {})}
+        />
       </div>
       <div
         data-testid="status-line"
@@ -138,6 +154,10 @@ export function App() {
       <MicMeter level={view.level} who={view.levelWho} line={view.line} />
       <TextInput ref={input} />
       {history ? <HistoryPanel onClose={() => setHistory(false)} /> : null}
+      {settings ? <SettingsPanel onClose={() => setSettings(false)} /> : null}
+      {view.status && !view.status.onboarded && !onboardingDone ? (
+        <Onboarding onDone={() => setOnboardingDone(true)} />
+      ) : null}
       {asks[0] ? <PermissionDialog key={asks[0].id} ask={asks[0]} onAnswer={answer} /> : null}
       {quitting ? (
         <QuitDialog onQuit={() => void call('quit_app')} onStay={() => setQuitting(false)} />

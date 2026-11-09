@@ -84,8 +84,12 @@ body,
 .card-enter {
   animation: card-enter 0.45s ease-out;
 }
+/* Reduced motion (OS setting or Markon's own switch) slows transitions instead of removing them. */
 @media (prefers-reduced-motion: reduce) {
   .card-enter {
     animation-duration: 0.9s;
   }
+}
+[data-reduced-motion="true"] .card-enter {
+  animation-duration: 0.9s;
 }
