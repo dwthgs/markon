@@ -35,10 +35,16 @@ pub struct UserTurn {
 
 impl UserTurn {
     pub fn voice(t: &str) -> Self {
-        Self { text: t.into(), source: TurnSource::Voice }
+        Self {
+            text: t.into(),
+            source: TurnSource::Voice,
+        }
     }
     pub fn text(t: &str) -> Self {
-        Self { text: t.into(), source: TurnSource::Text }
+        Self {
+            text: t.into(),
+            source: TurnSource::Text,
+        }
     }
 }
 
@@ -95,11 +101,27 @@ pub struct TurnSummary {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     StateChanged(AgentState),
-    TextDelta { turn_id: u64, text: String },
-    ToolCallStarted { turn_id: u64, id: String, name: String, input: Value },
-    ToolCallFinished { turn_id: u64, id: String, name: String, ok: bool, output: String },
+    TextDelta {
+        turn_id: u64,
+        text: String,
+    },
+    ToolCallStarted {
+        turn_id: u64,
+        id: String,
+        name: String,
+        input: Value,
+    },
+    ToolCallFinished {
+        turn_id: u64,
+        id: String,
+        name: String,
+        ok: bool,
+        output: String,
+    },
     TurnFinished(TurnSummary),
-    TurnCancelled { turn_id: u64 },
+    TurnCancelled {
+        turn_id: u64,
+    },
     Error(String),
 }
 
@@ -248,8 +270,16 @@ impl Agent {
         let started = Instant::now();
         let cfg = self.cfg.read().expect("cfg lock").clone();
         let provider = self.provider();
-        let model = cfg.model.clone().unwrap_or_else(|| provider.default_model());
-        let system = self.sections.iter().filter_map(|s| s.render(&turn)).collect::<Vec<_>>().join("\n\n");
+        let model = cfg
+            .model
+            .clone()
+            .unwrap_or_else(|| provider.default_model());
+        let system = self
+            .sections
+            .iter()
+            .filter_map(|s| s.render(&turn))
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let tools = self.tools.specs();
         // Work on a copy: history is only committed when the turn finishes, so a cancel leaves nothing behind.
         let mut msgs = self.history();
@@ -267,7 +297,18 @@ impl Agent {
                 tools: tools.clone(),
                 max_tokens: cfg.max_tokens,
             };
-            let end = self.round_with_retry(&*provider, req, &cfg, turn_id, &mut msgs, &mut text, &mut usage, &mut cancelled).await;
+            let end = self
+                .round_with_retry(
+                    &*provider,
+                    req,
+                    &cfg,
+                    turn_id,
+                    &mut msgs,
+                    &mut text,
+                    &mut usage,
+                    &mut cancelled,
+                )
+                .await;
             match end {
                 RoundEnd::Cancelled => return self.cancelled(turn_id),
                 RoundEnd::Failed(e) => {
@@ -287,12 +328,39 @@ impl Agent {
                     let over = rounds >= cfg.max_rounds || started.elapsed() >= cfg.turn_limit;
                     if over {
                         let mut results = Message::tool_results(
-                            calls.iter().map(|c| ToolResult { id: c.id.clone(), content: WRAP_UP.into(), is_error: true }).collect(),
+                            calls
+                                .iter()
+                                .map(|c| ToolResult {
+                                    id: c.id.clone(),
+                                    content: WRAP_UP.into(),
+                                    is_error: true,
+                                })
+                                .collect(),
                         );
-                        results.content.push(json!({"type": "text", "text": WRAP_UP}));
+                        results
+                            .content
+                            .push(json!({"type": "text", "text": WRAP_UP}));
                         msgs.push(results);
-                        let req = ChatRequest { model: model.clone(), system: system.clone(), messages: msgs.clone(), tools: tools.clone(), max_tokens: cfg.max_tokens };
-                        match self.round_with_retry(&*provider, req, &cfg, turn_id, &mut msgs, &mut text, &mut usage, &mut cancelled).await {
+                        let req = ChatRequest {
+                            model: model.clone(),
+                            system: system.clone(),
+                            messages: msgs.clone(),
+                            tools: tools.clone(),
+                            max_tokens: cfg.max_tokens,
+                        };
+                        match self
+                            .round_with_retry(
+                                &*provider,
+                                req,
+                                &cfg,
+                                turn_id,
+                                &mut msgs,
+                                &mut text,
+                                &mut usage,
+                                &mut cancelled,
+                            )
+                            .await
+                        {
                             RoundEnd::Cancelled => return self.cancelled(turn_id),
                             RoundEnd::Done { partial: p } => partial = p,
                             RoundEnd::Failed(_) | RoundEnd::Tools(_) => partial = true,
@@ -309,7 +377,10 @@ impl Agent {
             }
         }
         if partial && !text.is_empty() && msgs.last().map(|m| m.role) == Some(Role::User) {
-            msgs.push(Message { role: Role::Assistant, content: vec![json!({"type": "text", "text": text})] });
+            msgs.push(Message {
+                role: Role::Assistant,
+                content: vec![json!({"type": "text", "text": text})],
+            });
         }
         *self.history.lock().expect("history lock") = msgs;
         self.emit(AgentEvent::TurnFinished(TurnSummary {
@@ -343,12 +414,18 @@ impl Agent {
         let mut attempt = 0;
         loop {
             let before = text.len();
-            let end = self.round(provider, req.clone(), turn_id, msgs, text, usage, cancelled).await;
+            let end = self
+                .round(provider, req.clone(), turn_id, msgs, text, usage, cancelled)
+                .await;
             match end {
-                RoundEnd::Failed(e) if e.retryable() && attempt + 1 < cfg.tries && text.len() == before => {
+                RoundEnd::Failed(e)
+                    if e.retryable() && attempt + 1 < cfg.tries && text.len() == before =>
+                {
                     attempt += 1;
                     let wait = match e {
-                        ProviderError::RateLimited { retry_after_s: Some(s) } => Duration::from_secs(s).max(cfg.retry_base),
+                        ProviderError::RateLimited {
+                            retry_after_s: Some(s),
+                        } => Duration::from_secs(s).max(cfg.retry_base),
                         _ => cfg.retry_base * 2u32.pow(attempt - 1),
                     };
                     tokio::select! {
@@ -388,8 +465,16 @@ impl Agent {
                     self.emit(AgentEvent::TextDelta { turn_id, text: t });
                 }
                 Some(Ok(ChatDelta::Block(b))) => blocks.push(b),
-                Some(Ok(ChatDelta::ToolCall { id, name, input })) => calls.push(ToolCall { id, name, input, turn_id }),
-                Some(Ok(ChatDelta::Usage { input_tokens, output_tokens })) => {
+                Some(Ok(ChatDelta::ToolCall { id, name, input })) => calls.push(ToolCall {
+                    id,
+                    name,
+                    input,
+                    turn_id,
+                }),
+                Some(Ok(ChatDelta::Usage {
+                    input_tokens,
+                    output_tokens,
+                })) => {
                     usage.0 += input_tokens;
                     usage.1 += output_tokens;
                 }
@@ -399,7 +484,10 @@ impl Agent {
                 }
                 Some(Err(e)) => {
                     if !blocks.is_empty() {
-                        msgs.push(Message { role: Role::Assistant, content: blocks });
+                        msgs.push(Message {
+                            role: Role::Assistant,
+                            content: blocks,
+                        });
                     }
                     return RoundEnd::Failed(e);
                 }
@@ -409,7 +497,10 @@ impl Agent {
             return RoundEnd::Done { partial: true };
         };
         if !blocks.is_empty() {
-            msgs.push(Message { role: Role::Assistant, content: blocks });
+            msgs.push(Message {
+                role: Role::Assistant,
+                content: blocks,
+            });
         }
         if stop == StopReason::ToolUse && !calls.is_empty() {
             return RoundEnd::Tools(calls);
@@ -417,31 +508,59 @@ impl Agent {
         if stop == StopReason::Refusal && text.is_empty() {
             text.push_str("I can't help with that one.");
         }
-        RoundEnd::Done { partial: stop == StopReason::MaxTokens }
+        RoundEnd::Done {
+            partial: stop == StopReason::MaxTokens,
+        }
     }
 
-    async fn run_tools(&self, calls: Vec<ToolCall>, specs: &[ToolSpec], cap: usize) -> Vec<ToolResult> {
+    async fn run_tools(
+        &self,
+        calls: Vec<ToolCall>,
+        specs: &[ToolSpec],
+        cap: usize,
+    ) -> Vec<ToolResult> {
         let known: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         let mut handles = Vec::new();
         for c in calls {
-            self.emit(AgentEvent::ToolCallStarted { turn_id: c.turn_id, id: c.id.clone(), name: c.name.clone(), input: c.input.clone() });
+            self.emit(AgentEvent::ToolCallStarted {
+                turn_id: c.turn_id,
+                id: c.id.clone(),
+                name: c.name.clone(),
+                input: c.input.clone(),
+            });
             let fut = if known.contains(&c.name.as_str()) {
                 self.tools.call(c.clone())
             } else {
-                let msg = format!("Unknown tool {}. Available tools: {}", c.name, known.join(", "));
+                let msg = format!(
+                    "Unknown tool {}. Available tools: {}",
+                    c.name,
+                    known.join(", ")
+                );
                 Box::pin(async move { Err(msg) })
             };
             handles.push((c, tokio::spawn(fut)));
         }
         let mut out = Vec::new();
         for (c, h) in handles {
-            let r = h.await.unwrap_or_else(|e| Err(format!("tool crashed: {e}")));
+            let r = h
+                .await
+                .unwrap_or_else(|e| Err(format!("tool crashed: {e}")));
             let (ok, full) = match r {
                 Ok(s) => (true, s),
                 Err(s) => (false, s),
             };
-            self.emit(AgentEvent::ToolCallFinished { turn_id: c.turn_id, id: c.id.clone(), name: c.name.clone(), ok, output: full.clone() });
-            out.push(ToolResult { id: c.id, content: cap_utf8(&full, cap), is_error: !ok });
+            self.emit(AgentEvent::ToolCallFinished {
+                turn_id: c.turn_id,
+                id: c.id.clone(),
+                name: c.name.clone(),
+                ok,
+                output: full.clone(),
+            });
+            out.push(ToolResult {
+                id: c.id,
+                content: cap_utf8(&full, cap),
+                is_error: !ok,
+            });
         }
         out
     }
@@ -457,5 +576,10 @@ pub fn cap_utf8(s: &str, cap: usize) -> String {
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}\n[truncated: {} of {} bytes shown; the full output is on the card]", &s[..end], end, s.len())
+    format!(
+        "{}\n[truncated: {} of {} bytes shown; the full output is on the card]",
+        &s[..end],
+        end,
+        s.len()
+    )
 }

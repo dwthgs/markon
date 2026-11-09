@@ -12,7 +12,11 @@ impl ToolRuntime for Tools {
     fn specs(&self) -> Vec<ToolSpec> {
         ["slow", "fast", "boom", "big"]
             .iter()
-            .map(|n| ToolSpec { name: (*n).into(), description: String::new(), input_schema: json!({"type": "object"}) })
+            .map(|n| ToolSpec {
+                name: (*n).into(),
+                description: String::new(),
+                input_schema: json!({"type": "object"}),
+            })
             .collect()
     }
     fn call(&self, call: ToolCall) -> BoxFuture<'static, Result<String, String>> {
@@ -30,9 +34,18 @@ impl ToolRuntime for Tools {
     }
 }
 
-fn agent(scripts: Vec<Vec<Result<ChatDelta, ProviderError>>>) -> (Agent, Arc<FakeProvider>, UnboundedReceiver<AgentEvent>) {
+fn agent(
+    scripts: Vec<Vec<Result<ChatDelta, ProviderError>>>,
+) -> (Agent, Arc<FakeProvider>, UnboundedReceiver<AgentEvent>) {
     let fake = Arc::new(FakeProvider::new(scripts));
-    let (a, rx) = Agent::new(fake.clone(), Arc::new(Tools), AgentConfig { retry_base: Duration::from_millis(1), ..AgentConfig::default() });
+    let (a, rx) = Agent::new(
+        fake.clone(),
+        Arc::new(Tools),
+        AgentConfig {
+            retry_base: Duration::from_millis(1),
+            ..AgentConfig::default()
+        },
+    );
     (a, fake, rx)
 }
 
@@ -45,11 +58,27 @@ async fn drain(rx: &mut UnboundedReceiver<AgentEvent>) -> Vec<AgentEvent> {
 }
 
 fn states(ev: &[AgentEvent]) -> Vec<AgentState> {
-    ev.iter().filter_map(|e| if let AgentEvent::StateChanged(s) = e { Some(*s) } else { None }).collect()
+    ev.iter()
+        .filter_map(|e| {
+            if let AgentEvent::StateChanged(s) = e {
+                Some(*s)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn finished(ev: &[AgentEvent]) -> &TurnSummary {
-    ev.iter().find_map(|e| if let AgentEvent::TurnFinished(t) = e { Some(t) } else { None }).expect("turn finished")
+    ev.iter()
+        .find_map(|e| {
+            if let AgentEvent::TurnFinished(t) = e {
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .expect("turn finished")
 }
 
 #[tokio::test]
@@ -61,7 +90,15 @@ async fn states_are_emitted_once_and_in_order() {
     a.set_state(AgentState::Speaking);
     a.set_state(AgentState::Idle);
     let ev = drain(&mut rx).await;
-    assert_eq!(states(&ev), vec![AgentState::Listening, AgentState::Thinking, AgentState::Speaking, AgentState::Idle]);
+    assert_eq!(
+        states(&ev),
+        vec![
+            AgentState::Listening,
+            AgentState::Thinking,
+            AgentState::Speaking,
+            AgentState::Idle
+        ]
+    );
 }
 
 #[tokio::test]
@@ -82,7 +119,10 @@ async fn parallel_tool_calls_return_results_in_call_order() {
     let t = std::time::Instant::now();
     a.submit(UserTurn::text("go")).await;
     let ev = drain(&mut rx).await;
-    assert!(t.elapsed() < Duration::from_millis(400), "tools ran in parallel");
+    assert!(
+        t.elapsed() < Duration::from_millis(400),
+        "tools ran in parallel"
+    );
     let second = &fake.requests.lock().unwrap()[1];
     let results = &second.messages.last().unwrap().content;
     assert_eq!(results[0]["tool_use_id"], "t1");
@@ -99,37 +139,72 @@ async fn a_failing_or_unknown_tool_is_a_model_visible_error_and_the_loop_continu
     ]);
     a.submit(UserTurn::text("go")).await;
     let ev = drain(&mut rx).await;
-    let r = fake.requests.lock().unwrap()[1].messages.last().unwrap().content.clone();
+    let r = fake.requests.lock().unwrap()[1]
+        .messages
+        .last()
+        .unwrap()
+        .content
+        .clone();
     assert_eq!(r[0]["is_error"], true);
     assert_eq!(r[0]["content"], "it broke");
     assert_eq!(r[1]["is_error"], true);
     let listed = r[1]["content"].as_str().unwrap();
-    assert!(listed.contains("slow") && listed.contains("fast") && listed.contains("boom"), "{listed}");
+    assert!(
+        listed.contains("slow") && listed.contains("fast") && listed.contains("boom"),
+        "{listed}"
+    );
     assert_eq!(finished(&ev).text, "Recovered.");
 }
 
 #[tokio::test]
 async fn tool_output_is_capped_at_32_kb_for_the_model() {
-    let (a, fake, _rx) = agent(vec![FakeProvider::tools(&[("t1", "big", json!({}))]), FakeProvider::text("ok")]);
+    let (a, fake, _rx) = agent(vec![
+        FakeProvider::tools(&[("t1", "big", json!({}))]),
+        FakeProvider::text("ok"),
+    ]);
     a.submit(UserTurn::text("go")).await;
-    let r = fake.requests.lock().unwrap()[1].messages.last().unwrap().content.clone();
+    let r = fake.requests.lock().unwrap()[1]
+        .messages
+        .last()
+        .unwrap()
+        .content
+        .clone();
     assert!(r[0]["content"].as_str().unwrap().len() <= 32 * 1024);
 }
 
 #[tokio::test]
 async fn stops_after_12_tool_rounds_and_asks_the_model_to_wrap_up() {
-    let mut scripts: Vec<_> = (0..12).map(|i| FakeProvider::tools(&[(&format!("t{i}"), "fast", json!({}))])).collect();
+    let mut scripts: Vec<_> = (0..12)
+        .map(|i| FakeProvider::tools(&[(&format!("t{i}"), "fast", json!({}))]))
+        .collect();
     scripts.push(FakeProvider::tools(&[("t12", "fast", json!({}))]));
     scripts.push(FakeProvider::text("Wrapping up."));
     let (a, fake, mut rx) = agent(scripts);
     a.submit(UserTurn::text("loop")).await;
     let ev = drain(&mut rx).await;
     let reqs = fake.requests.lock().unwrap();
-    let ran = ev.iter().filter(|e| matches!(e, AgentEvent::ToolCallFinished { .. })).count();
+    let ran = ev
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::ToolCallFinished { .. }))
+        .count();
     assert_eq!(ran, 12);
-    let last = reqs.last().unwrap().messages.last().unwrap().content.clone();
-    assert!(last.iter().all(|b| b["is_error"] == true || b["type"] == "text"), "unrun calls are refused");
-    assert!(last.iter().any(|b| b["text"].as_str().is_some_and(|t| t.contains("wrap up"))));
+    let last = reqs
+        .last()
+        .unwrap()
+        .messages
+        .last()
+        .unwrap()
+        .content
+        .clone();
+    assert!(
+        last.iter()
+            .all(|b| b["is_error"] == true || b["type"] == "text"),
+        "unrun calls are refused"
+    );
+    assert!(
+        last.iter()
+            .any(|b| b["text"].as_str().is_some_and(|t| t.contains("wrap up")))
+    );
     assert_eq!(finished(&ev).text, "Wrapping up.");
 }
 
@@ -137,7 +212,9 @@ async fn stops_after_12_tool_rounds_and_asks_the_model_to_wrap_up() {
 async fn retries_429_and_529_three_times_then_apologises() {
     let (a, fake, mut rx) = agent(vec![
         vec![Err(ProviderError::Overloaded)],
-        vec![Err(ProviderError::RateLimited { retry_after_s: None })],
+        vec![Err(ProviderError::RateLimited {
+            retry_after_s: None,
+        })],
         FakeProvider::text("Third time lucky."),
     ]);
     a.submit(UserTurn::text("hi")).await;
@@ -167,7 +244,10 @@ async fn a_dropped_stream_keeps_the_partial_answer_and_marks_it() {
 
 #[tokio::test]
 async fn a_cancelled_turn_leaves_no_history_and_drops_its_cards() {
-    let mut fake = FakeProvider::new(vec![FakeProvider::tools(&[("t1", "slow", json!({}))]), FakeProvider::text("late")]);
+    let mut fake = FakeProvider::new(vec![
+        FakeProvider::tools(&[("t1", "slow", json!({}))]),
+        FakeProvider::text("late"),
+    ]);
     fake.delay = Duration::from_millis(30);
     let fake = Arc::new(fake);
     let (a, mut rx) = Agent::new(fake, Arc::new(Tools), AgentConfig::default());
@@ -178,7 +258,10 @@ async fn a_cancelled_turn_leaves_no_history_and_drops_its_cards() {
     a.cancel();
     h.await.unwrap();
     let ev = drain(&mut rx).await;
-    assert!(ev.iter().any(|e| matches!(e, AgentEvent::TurnCancelled { .. })));
+    assert!(
+        ev.iter()
+            .any(|e| matches!(e, AgentEvent::TurnCancelled { .. }))
+    );
     assert!(!ev.iter().any(|e| matches!(e, AgentEvent::TurnFinished(_))));
     assert!(a.history().is_empty(), "no half-written history");
     assert_eq!(states(&ev).last(), Some(&AgentState::Idle));
@@ -190,7 +273,10 @@ async fn prompt_sections_compose_the_system_prompt() {
     a.add_section(Arc::new(StaticSection("You are Markon.".into())));
     a.add_section(Arc::new(StaticSection("Be brief.".into())));
     a.submit(UserTurn::text("hi")).await;
-    assert_eq!(fake.requests.lock().unwrap()[0].system, "You are Markon.\n\nBe brief.");
+    assert_eq!(
+        fake.requests.lock().unwrap()[0].system,
+        "You are Markon.\n\nBe brief."
+    );
 }
 
 #[tokio::test]

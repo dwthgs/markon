@@ -50,7 +50,9 @@ pub fn is_safe_app_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && !name.starts_with('-')
-        && name.chars().all(|c| c.is_alphanumeric() || " .-_&".contains(c))
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || " .-_&".contains(c))
 }
 
 pub fn current() -> impl Platform {
@@ -60,22 +62,42 @@ pub fn current() -> impl Platform {
 pub struct MacOs;
 
 fn entry(account: &str) -> Result<keyring::Entry, PlatformError> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| PlatformError::Keychain(e.to_string()))
+    keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .map_err(|e| PlatformError::Keychain(e.to_string()))
 }
 
 fn run_open(args: &[&str]) -> Result<(), PlatformError> {
-    let ok = std::process::Command::new("/usr/bin/open").args(args).status().map(|s| s.success()).unwrap_or(false);
-    if ok { Ok(()) } else { Err(PlatformError::Open(args.join(" "))) }
+    let ok = std::process::Command::new("/usr/bin/open")
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(PlatformError::Open(args.join(" ")))
+    }
 }
 
 /// Processes that mean a call or screen share is in progress.
-const CALL_PROCESSES: &[&str] = &["CptHost", "zoom.us", "FaceTime", "Microsoft Teams", "MSTeams", "Webex", "Slack Huddle"];
+const CALL_PROCESSES: &[&str] = &[
+    "CptHost",
+    "zoom.us",
+    "FaceTime",
+    "Microsoft Teams",
+    "MSTeams",
+    "Webex",
+    "Slack Huddle",
+];
 
 impl Platform for MacOs {
     fn data_dir(&self) -> PathBuf {
-        std::env::var_os("MARKON_HOME").map(PathBuf::from).unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into())).join(".markon")
-        })
+        std::env::var_os("MARKON_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
+                    .join(".markon")
+            })
     }
 
     fn secret_get(&self, account: &str) -> Result<Option<String>, PlatformError> {
@@ -87,7 +109,9 @@ impl Platform for MacOs {
     }
 
     fn secret_set(&self, account: &str, value: &str) -> Result<(), PlatformError> {
-        entry(account)?.set_password(value).map_err(|e| PlatformError::Keychain(e.to_string()))
+        entry(account)?
+            .set_password(value)
+            .map_err(|e| PlatformError::Keychain(e.to_string()))
     }
 
     fn secret_delete(&self, account: &str) -> Result<(), PlatformError> {
@@ -117,11 +141,15 @@ impl Platform for MacOs {
 
     fn in_call_or_sharing(&self) -> bool {
         // shortcut: process-name heuristic; upgrade to the CoreAudio "device in use" property when it misfires.
-        let Ok(out) = std::process::Command::new("/bin/ps").args(["-axo", "comm"]).output() else {
+        let Ok(out) = std::process::Command::new("/bin/ps")
+            .args(["-axo", "comm"])
+            .output()
+        else {
             return false;
         };
         let list = String::from_utf8_lossy(&out.stdout);
-        list.lines().any(|l| CALL_PROCESSES.iter().any(|p| l.ends_with(p)))
+        list.lines()
+            .any(|l| CALL_PROCESSES.iter().any(|p| l.ends_with(p)))
     }
 }
 
