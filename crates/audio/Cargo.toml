@@ -1,0 +1,25 @@
+[package]
+name = "markon-audio"
+description = "Capture, VAD, whisper, Kokoro, playback and audio features"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cpal.workspace = true
+rubato.workspace = true
+whisper-rs.workspace = true
+ort.workspace = true
+realfft = "=3.5.0"
+audioadapter-buffers = "=5.2.0"
+sha2 = "=0.10.9"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
