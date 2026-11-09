@@ -1,5 +1,6 @@
 //! Markon desktop shell: owns the window, tray, menu and hotkey, and wires the Rust core to the UI.
 mod core;
+mod ptt;
 mod remember;
 mod settings;
 mod setup;
@@ -69,6 +70,13 @@ fn cancel(core: State<'_, CoreState>) {
 #[tauri::command]
 fn hide_window(core: State<'_, CoreState>) {
     core.hide();
+}
+
+/// Toggle macOS full screen on whichever display the window is on now.
+#[tauri::command]
+fn toggle_full_screen(window: tauri::WebviewWindow) -> Result<(), String> {
+    let on = window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(!on).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -203,6 +211,7 @@ pub fn run() {
             submit_text,
             cancel,
             hide_window,
+            toggle_full_screen,
             quit_app,
             open_mic_settings,
             answer_permission,

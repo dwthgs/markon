@@ -18,7 +18,7 @@ test.describe('shell', () => {
   test('a drag strip spans the top and does not cover the controls', async ({ page }) => {
     await page.goto('/');
     const strip = page.getByTestId('drag-strip');
-    await expect(strip).toHaveAttribute('data-tauri-drag-region');
+    await expect(strip).toHaveAttribute('title', /drag to move/i);
     const box = await strip.boundingBox();
     if (!box) throw new Error('strip has no box');
     expect(box.y).toBe(0);

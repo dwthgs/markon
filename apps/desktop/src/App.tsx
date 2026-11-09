@@ -1,5 +1,6 @@
 import { type FeatureFeed, VoiceCore } from '@markon/voice-core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from './canvas/Canvas';
 import { layout } from './canvas/layout';
@@ -163,13 +164,19 @@ export function App() {
         {LABEL[view.state]}
       </div>
       <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} />
-      {/* drag here to move the window; double-click fills the screen again.
+      {/* drag here to move the window; double-click toggles full screen on this display.
           Sits under the controls and notices so their buttons stay clickable. */}
       <div
-        data-tauri-drag-region
         data-testid="drag-strip"
-        title="Drag to move"
-        className="group absolute inset-x-0 top-0 grid h-7 place-items-center"
+        role="toolbar"
+        aria-label="Window handle: drag to move, double-click for full screen"
+        title="Drag to move. Double-click for full screen."
+        className="group absolute inset-x-0 top-0 grid h-7 cursor-grab place-items-center"
+        onMouseDown={(e) => {
+          if (e.button !== 0 || !inTauri()) return;
+          if (e.detail === 2) void call('toggle_full_screen');
+          else void getCurrentWindow().startDragging();
+        }}
       >
         <div className="pointer-events-none h-1 w-16 rounded-full bg-primary/20 transition-colors group-hover:bg-primary/60" />
       </div>

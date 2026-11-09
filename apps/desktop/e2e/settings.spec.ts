@@ -31,6 +31,12 @@ test('Cmd+, opens settings in the HUD and Esc closes it', async ({ page }) => {
   expect(await calls(page, 'hide_window')).toHaveLength(0);
 });
 
+test('the Close button closes settings', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await panel.getByRole('button', { name: /close/i }).click();
+  await expect(panel).toBeHidden();
+});
+
 test('switching route and model saves straight away', async ({ page }) => {
   const panel = page.getByRole('dialog', { name: 'Settings' });
   await panel.getByLabel('Model').selectOption('claude-sonnet-5-5');
@@ -66,4 +72,10 @@ test('export and a confirmed full wipe', async ({ page }) => {
   expect(await calls(page, 'wipe_all')).toHaveLength(0);
   await panel.getByRole('button', { name: 'Yes, wipe everything' }).click();
   expect(await calls(page, 'wipe_all')).toHaveLength(1);
+});
+
+test('double-clicking the drag strip toggles full screen', async ({ page }) => {
+  await page.keyboard.press('Escape');
+  await page.getByTestId('drag-strip').dblclick({ position: { x: 20, y: 10 } });
+  expect(await calls(page, 'toggle_full_screen')).toHaveLength(1);
 });
