@@ -3,10 +3,12 @@ mod core;
 mod settings;
 mod tray;
 mod voice_commands;
+mod workspace;
 
 use crate::core::Core;
-use markon_agent::{NoTools, UserTurn};
+use markon_agent::{ToolCall, UserTurn};
 use markon_platform::Platform;
+use markon_tools::permissions::Decision;
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -58,6 +60,31 @@ fn quit_app(app: AppHandle) {
 #[tauri::command]
 fn open_mic_settings(core: State<'_, CoreState>) -> Result<(), String> {
     core.platform.open_mic_settings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn answer_permission(core: State<'_, CoreState>, id: u64, decision: Decision) {
+    core.prompter.answer(id, decision);
+}
+
+/// The Camera control: the user picks a window to capture (asks first), shown as a card.
+#[tauri::command]
+async fn capture_window(core: State<'_, CoreState>) -> Result<(), String> {
+    let id = format!("camera-{}", markon_tools::cards::now_ms());
+    core.tools
+        .call(ToolCall {
+            id,
+            name: "screenshot_window".into(),
+            input: serde_json::json!({}),
+            turn_id: 0,
+        })
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+fn mcp_status(core: State<'_, CoreState>) -> serde_json::Value {
+    workspace::mcp_status(&core.tools)
 }
 
 /// Dev builds report the window's frame rate here so it can be checked without devtools.
@@ -112,7 +139,7 @@ pub fn run() {
             let _ = app.emit(EV_MENU, e.id().as_ref());
         })
         .setup(|app| {
-            let core = Core::start(app.handle().clone(), Arc::new(NoTools));
+            let core = Core::start(app.handle().clone());
             let hotkey = core.settings.lock().expect("settings").hotkey.clone();
             app.manage(core);
             tray::build(app.handle())?;
@@ -133,6 +160,9 @@ pub fn run() {
             hide_window,
             quit_app,
             open_mic_settings,
+            answer_permission,
+            capture_window,
+            mcp_status,
             report_fps
         ])
         .run(tauri::generate_context!())

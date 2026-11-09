@@ -1,8 +1,13 @@
 import { type FeatureFeed, VoiceCore } from '@markon/voice-core';
 import { listen } from '@tauri-apps/api/event';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas } from './canvas/Canvas';
+import { layout } from './canvas/layout';
+import { useCards } from './canvas/useCards';
+import { Controls } from './hud/Controls';
 import { MicMeter } from './hud/MicMeter';
 import { Notices } from './hud/Notices';
+import { type PermissionAsk, PermissionDialog } from './hud/PermissionDialog';
 import { QuitDialog } from './hud/QuitDialog';
 import { TextInput } from './hud/TextInput';
 import { useCore } from './lib/core';
@@ -21,18 +26,59 @@ export function App() {
   const feed = useRef<FeatureFeed>(null);
   const input = useRef<HTMLInputElement>(null);
   const view = useCore(feed);
+  const { cards, clear, tidy, toFront } = useCards();
   const [quitting, setQuitting] = useState(false);
-  // HUD centre is 800 px on a large screen; smaller screens shrink it. The core never moves.
-  const size = Math.round(Math.min(800, Math.min(width, height) * 0.78));
+  const [asks, setAsks] = useState<PermissionAsk[]>([]);
+  const [big, setBig] = useState<Set<string>>(new Set());
+  const [focusId, setFocusId] = useState<string | null>(null);
+
+  // HUD centre is 800 px on a large screen. The core never moves; with cards it shrinks a little.
+  const coreMax = Math.round(Math.min(800, Math.min(width, height) * 0.78));
+  const lay = useMemo(() => layout(cards, width, height, big, coreMax), [cards, width, height, big, coreMax]);
+  const size = lay.core;
+
+  const clearAll = useCallback(() => {
+    clear();
+    setBig(new Set());
+    setFocusId(null);
+  }, [clear]);
+
+  const focusOn = useCallback(
+    (words: string) => {
+      const w = words.toLowerCase();
+      const hit = [...cards].reverse().find((c) => c.title.toLowerCase().includes(w));
+      if (!hit) return;
+      toFront(hit.id);
+      setBig(new Set([hit.id]));
+      setFocusId(hit.id);
+    },
+    [cards, toFront],
+  );
+
+  const command = useCallback(
+    (cmd: string, arg = '') => {
+      if (cmd === 'quit') setQuitting(true);
+      else if (cmd === 'clear') clearAll();
+      else if (cmd === 'tidy') tidy();
+      else if (cmd === 'focus') focusOn(arg);
+      else if (cmd === 'bigger') {
+        const id = focusId ?? cards.at(-1)?.id;
+        if (id) setBig((b) => new Set(b).add(id));
+      } else if (cmd === 'bring_back') void call('bring_back', { topic: arg });
+    },
+    [clearAll, tidy, focusOn, focusId, cards],
+  );
+  const commandRef = useRef(command);
+  commandRef.current = command;
 
   useEffect(() => {
     if (!inTauri()) return;
-    const onCommand = (cmd: string) => {
-      if (cmd === 'quit') setQuitting(true);
-    };
     const subs = [
-      listen<string>('markon://menu', (e) => onCommand(e.payload)),
-      listen<{ command: string }>('markon://command', (e) => onCommand(e.payload.command)),
+      listen<string>('markon://menu', (e) => commandRef.current(e.payload)),
+      listen<{ command: string; arg: string }>('markon://command', (e) =>
+        commandRef.current(e.payload.command, e.payload.arg),
+      ),
+      listen<PermissionAsk>('markon://permission', (e) => setAsks((a) => [...a, e.payload])),
     ];
     return () => {
       for (const s of subs) void s.then((f) => f());
@@ -43,15 +89,26 @@ export function App() {
     if (view.micProblem === 'missing') input.current?.focus();
   }, [view.micProblem]);
 
+  const answer = (allow: boolean) => {
+    const ask = asks[0];
+    if (!ask) return;
+    void call('answer_permission', { id: ask.id, decision: allow ? 'allow' : 'deny' });
+    setAsks((a) => a.slice(1));
+  };
+
+  const escState = useRef({ quitting, asks: asks.length, cards: cards.length, clearAll });
+  escState.current = { quitting, asks: asks.length, cards: cards.length, clearAll };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || quitting || e.defaultPrevented) return;
-      // Canvas cards are cleared first; with nothing on screen Esc hides to the tray.
-      void call('hide_window');
+      const s = escState.current;
+      if (e.key !== 'Escape' || s.quitting || s.asks || e.defaultPrevented) return;
+      // Esc clears the canvas when it has cards, otherwise hides to the tray.
+      if (s.cards) s.clearAll();
+      else void call('hide_window');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [quitting]);
+  }, []);
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-[radial-gradient(70%_60%_at_50%_45%,#071624_0%,#03060c_70%)]">
@@ -67,9 +124,17 @@ export function App() {
       >
         {LABEL[view.state]}
       </div>
+      <Canvas cards={cards} lay={lay} big={big} focusId={focusId} onOverflowPick={toFront} />
       <Notices view={view} />
+      <Controls
+        onHistory={() => void call('open_history')}
+        onTidy={tidy}
+        onClear={clearAll}
+        onCamera={() => void call('capture_window')}
+      />
       <MicMeter level={view.level} who={view.levelWho} line={view.line} />
       <TextInput ref={input} />
+      {asks[0] ? <PermissionDialog key={asks[0].id} ask={asks[0]} onAnswer={answer} /> : null}
       {quitting ? (
         <QuitDialog onQuit={() => void call('quit_app')} onStay={() => setQuitting(false)} />
       ) : null}

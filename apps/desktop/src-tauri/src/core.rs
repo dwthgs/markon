@@ -1,13 +1,14 @@
 //! Wires audio, agent and platform together and forwards their events to the UI.
 use crate::settings::{Route, Settings};
-use markon_agent::{
-    Agent, AgentConfig, AgentEvent, AgentState, StaticSection, ToolRuntime, UserTurn,
-};
+use crate::workspace::{self, HudPrompter, TurnCards};
+use markon_agent::{Agent, AgentConfig, AgentEvent, AgentState, StaticSection, UserTurn};
 use markon_audio::sentences::SentenceQueue;
 use markon_audio::{Audio, AudioEvent, Voice, manifest::Manifest};
 use markon_platform::{MacOs, Platform, accounts};
 use markon_provider::anthropic::AnthropicDirect;
 use markon_provider::{KeySource, ModelProvider};
+use markon_tools::Runtime;
+use markon_tools::cards::Card;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +30,10 @@ pub struct Core {
     pub settings: Mutex<Settings>,
     pub audio: Arc<Audio>,
     pub agent: Arc<Agent>,
+    pub tools: Arc<Runtime>,
+    pub prompter: Arc<HudPrompter>,
+    turn_cards: TurnCards,
+    last_user: Mutex<String>,
     sentences: Mutex<SentenceQueue>,
     reply_started: AtomicBool,
     queued_speech: AtomicBool,
@@ -72,7 +77,7 @@ pub fn provider_for(route: Route, platform: Arc<MacOs>) -> Arc<dyn ModelProvider
 }
 
 impl Core {
-    pub fn start(app: AppHandle, tools: Arc<dyn ToolRuntime>) -> Arc<Self> {
+    pub fn start(app: AppHandle) -> Arc<Self> {
         let platform = Arc::new(markon_platform::MacOs);
         let dir = platform.data_dir();
         let settings = Settings::load(&dir);
@@ -101,10 +106,22 @@ impl Core {
             }
         })));
 
+        let card_app = app.clone();
+        let card_sink: Arc<dyn Fn(Card) + Send + Sync> = Arc::new(move |c: Card| {
+            let _ = card_app.emit(workspace::EV_CARD, &c);
+        });
+        let prompter = Arc::new(HudPrompter::new(app.clone()));
+        let tools = workspace::runtime(
+            settings.approved_folders.clone(),
+            prompter.clone(),
+            &dir.join("cache"),
+            card_sink.clone(),
+        );
+        workspace::start_mcp(tools.clone(), &dir.join("mcp.json"));
         let provider = provider_for(settings.route, platform.clone());
         let (mut agent, mut rx) = Agent::new(
             provider,
-            tools,
+            Arc::new(workspace::shared(&tools)),
             AgentConfig {
                 model: settings.model.clone(),
                 ..AgentConfig::default()
@@ -118,6 +135,10 @@ impl Core {
             settings: Mutex::new(settings),
             audio,
             agent: Arc::new(agent),
+            tools,
+            prompter,
+            turn_cards: TurnCards::new(card_sink),
+            last_user: Mutex::new(String::new()),
             sentences: Mutex::new(SentenceQueue::new(MAX_SENTENCES)),
             reply_started: AtomicBool::new(false),
             queued_speech: AtomicBool::new(false),
@@ -213,6 +234,8 @@ impl Core {
     }
 
     fn on_agent(&self, e: &AgentEvent) {
+        let user = self.last_user.lock().map(|u| u.clone()).unwrap_or_default();
+        self.turn_cards.on_agent(e, &user);
         match e {
             AgentEvent::StateChanged(s) => crate::tray::set_state(&self.app, *s),
             AgentEvent::TextDelta { text, .. } => {
@@ -322,6 +345,7 @@ impl Core {
         }
         self.reset_reply();
         self.turn_done.store(false, Ordering::SeqCst);
+        *self.last_user.lock().expect("last_user") = turn.text.clone();
         self.agent.submit(turn).await;
     }
 

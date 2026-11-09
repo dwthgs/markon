@@ -79,7 +79,10 @@ mod tests {
     #[test]
     fn round_trips_and_survives_corruption() {
         let dir = std::env::temp_dir().join(format!("markon-settings-{}", std::process::id()));
-        let mut s = Settings { voice: Some(Voice::Markan), ..Default::default() };
+        let mut s = Settings {
+            voice: Some(Voice::Markan),
+            ..Default::default()
+        };
         s.approved_folders.push("/tmp/x".into());
         s.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), s);

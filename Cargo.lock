@@ -2559,6 +2559,7 @@ dependencies = [
  "markon-audio",
  "markon-platform",
  "markon-provider",
+ "markon-tools",
  "serde",
  "serde_json",
  "tauri",

@@ -23,6 +23,7 @@ markon-agent = { path = "../../../crates/agent" }
 markon-audio = { path = "../../../crates/audio" }
 markon-platform = { path = "../../../crates/platform" }
 markon-provider = { path = "../../../crates/provider" }
+markon-tools = { path = "../../../crates/tools" }
 
 [lints]
 workspace = true
