@@ -119,7 +119,7 @@ pub fn provider_for(settings: &Settings, platform: Arc<MacOs>) -> Arc<dyn ModelP
 
 impl Core {
     pub fn start(app: AppHandle) -> Arc<Self> {
-        let platform = Arc::new(markon_platform::MacOs);
+        let platform = Arc::new(markon_platform::MacOs::default());
         let dir = platform.data_dir();
         let mut settings = Settings::load(&dir);
         if settings.device_id.is_none() {

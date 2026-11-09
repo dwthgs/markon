@@ -56,10 +56,15 @@ pub fn is_safe_app_name(name: &str) -> bool {
 }
 
 pub fn current() -> impl Platform {
-    MacOs
+    MacOs::default()
 }
 
-pub struct MacOs;
+/// Secrets are read from the keychain once per launch and kept in memory: every keychain read by a
+/// new (unsigned dev) build makes macOS ask for the login password.
+#[derive(Default)]
+pub struct MacOs {
+    secrets: std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
+}
 
 fn entry(account: &str) -> Result<keyring::Entry, PlatformError> {
     keyring::Entry::new(KEYCHAIN_SERVICE, account)
@@ -101,24 +106,41 @@ impl Platform for MacOs {
     }
 
     fn secret_get(&self, account: &str) -> Result<Option<String>, PlatformError> {
-        match entry(account)?.get_password() {
-            Ok(v) => Ok(Some(v)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(PlatformError::Keychain(e.to_string())),
+        let mut cache = self.secrets.lock().expect("secrets");
+        if let Some(v) = cache.get(account) {
+            return Ok(v.clone());
         }
+        // A failed read (for example a denied prompt) is not cached, so the next use can ask again.
+        let v = match entry(account)?.get_password() {
+            Ok(v) => Some(v),
+            Err(keyring::Error::NoEntry) => None,
+            Err(e) => return Err(PlatformError::Keychain(e.to_string())),
+        };
+        cache.insert(account.to_string(), v.clone());
+        Ok(v)
     }
 
     fn secret_set(&self, account: &str, value: &str) -> Result<(), PlatformError> {
         entry(account)?
             .set_password(value)
-            .map_err(|e| PlatformError::Keychain(e.to_string()))
+            .map_err(|e| PlatformError::Keychain(e.to_string()))?;
+        self.secrets
+            .lock()
+            .expect("secrets")
+            .insert(account.to_string(), Some(value.to_string()));
+        Ok(())
     }
 
     fn secret_delete(&self, account: &str) -> Result<(), PlatformError> {
         match entry(account)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(PlatformError::Keychain(e.to_string())),
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(PlatformError::Keychain(e.to_string())),
         }
+        self.secrets
+            .lock()
+            .expect("secrets")
+            .insert(account.to_string(), None);
+        Ok(())
     }
 
     fn open_url(&self, url: &str) -> Result<(), PlatformError> {
@@ -179,7 +201,7 @@ mod tests {
     #[test]
     fn data_dir_is_under_home() {
         if std::env::var_os("MARKON_HOME").is_none() {
-            assert!(MacOs.data_dir().ends_with(".markon"));
+            assert!(MacOs::default().data_dir().ends_with(".markon"));
         }
     }
 
@@ -187,7 +209,7 @@ mod tests {
     #[test]
     #[ignore]
     fn keychain_round_trip() {
-        let p = MacOs;
+        let p = MacOs::default();
         let acct = "markon-test-account";
         p.secret_set(acct, "value-1").unwrap();
         assert_eq!(p.secret_get(acct).unwrap().as_deref(), Some("value-1"));

@@ -59,7 +59,7 @@ impl Runtime {
         Self {
             perms: Arc::new(perms),
             cards,
-            platform: Arc::new(markon_platform::MacOs),
+            platform: Arc::new(markon_platform::MacOs::default()),
             mcp: RwLock::new(Vec::new()),
             http: reqwest::Client::builder()
                 .user_agent("Markon/0.1 (+https://markon.app)")
