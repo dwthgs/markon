@@ -112,17 +112,22 @@ pub fn number_words(n: u64) -> String {
     out.join(" ")
 }
 
+/// The product names are not in misaki's dictionaries; without these they would be spelled out.
+const NAMES: &[(&str, &str)] = &[("Markon", "mˈɑːkɒn"), ("Markan", "mˈɑːkən")];
+
 impl G2p {
     pub fn load(gold: &Path, silver: &Path) -> std::io::Result<Self> {
         let mut dict = parse(&std::fs::read_to_string(silver)?).map_err(std::io::Error::other)?;
         dict.extend(parse(&std::fs::read_to_string(gold)?).map_err(std::io::Error::other)?);
+        dict.extend(NAMES.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         Ok(Self { dict })
     }
 
     pub fn from_entries(entries: &[(&str, &str)]) -> Self {
         Self {
-            dict: entries
+            dict: NAMES
                 .iter()
+                .chain(entries)
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
         }
@@ -309,6 +314,12 @@ mod tests {
     #[test]
     fn spells_out_unknown_words_instead_of_guessing() {
         assert_eq!(g().phonemize("QX"), "kjˈuː ˈɛks");
+    }
+
+    #[test]
+    fn says_its_own_names() {
+        assert_eq!(g().phonemize("Markon"), "mˈɑːkɒn");
+        assert_eq!(g().phonemize("markan's"), "mˈɑːkənz");
     }
 
     #[test]
