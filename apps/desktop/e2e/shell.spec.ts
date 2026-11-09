@@ -15,6 +15,25 @@ test.describe('shell', () => {
     expect(Math.abs(box.y + box.height / 2 - vp.height / 2)).toBeLessThanOrEqual(1);
   });
 
+  test('a drag strip spans the top and does not cover the controls', async ({ page }) => {
+    await page.goto('/');
+    const strip = page.getByTestId('drag-strip');
+    await expect(strip).toHaveAttribute('data-tauri-drag-region');
+    const box = await strip.boundingBox();
+    if (!box) throw new Error('strip has no box');
+    expect(box.y).toBe(0);
+    expect(box.width).toBe(page.viewportSize()?.width);
+    // The History button sits inside the strip's band and must still receive the click.
+    const history = page.getByRole('button', { name: 'History' });
+    const hb = await history.boundingBox();
+    if (!hb) throw new Error('no history button');
+    const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.textContent, {
+      x: hb.x + hb.width / 2,
+      y: hb.y + hb.height / 2,
+    });
+    expect(hit).toBe('History');
+  });
+
   test('the core animates', async ({ page }) => {
     await page.goto('/');
     const core = page.getByRole('img', { name: /voice core/i });

@@ -163,6 +163,16 @@ export function App() {
         {LABEL[view.state]}
       </div>
       <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} />
+      {/* drag here to move the window; double-click fills the screen again.
+          Sits under the controls and notices so their buttons stay clickable. */}
+      <div
+        data-tauri-drag-region
+        data-testid="drag-strip"
+        title="Drag to move"
+        className="group absolute inset-x-0 top-0 grid h-7 place-items-center"
+      >
+        <div className="pointer-events-none h-1 w-16 rounded-full bg-primary/20 transition-colors group-hover:bg-primary/60" />
+      </div>
       <Notices view={view} />
       <Controls
         onHistory={() => setHistory((h) => !h)}

@@ -15,9 +15,10 @@
       {
         "label": "main",
         "title": "Markon",
-        "fullscreen": true,
+        "fullscreen": false,
+        "maximized": true,
         "decorations": false,
-        "resizable": false,
+        "resizable": true,
         "backgroundColor": "#03060c",
         "theme": "Dark"
       }
