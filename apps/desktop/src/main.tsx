@@ -5,6 +5,10 @@ import { startFpsProbe } from './lib/fpsProbe';
 import './components/thegridcn-theme.css';
 import './styles.css';
 
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('e2e')) {
+  (await import('./e2e/fakeTauri')).installFakeTauri();
+}
+
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
     <App />

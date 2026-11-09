@@ -98,7 +98,8 @@ pub struct TurnSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+/// Serialised as `{ "type": "...", "data": ... }` for the UI.
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum AgentEvent {
     StateChanged(AgentState),
     TextDelta {

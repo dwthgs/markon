@@ -286,3 +286,11 @@ async fn usage_is_reported_per_turn() {
     let t = drain(&mut rx).await;
     assert_eq!(finished(&t).usage, (10, 5));
 }
+
+#[test]
+fn events_serialise_for_the_ui() {
+    let s = serde_json::to_value(AgentEvent::StateChanged(AgentState::Listening)).unwrap();
+    assert_eq!(s, json!({"type": "state_changed", "data": "listening"}));
+    let e = serde_json::to_value(AgentEvent::Error("x".into())).unwrap();
+    assert_eq!(e, json!({"type": "error", "data": "x"}));
+}

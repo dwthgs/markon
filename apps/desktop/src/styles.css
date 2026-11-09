@@ -52,3 +52,25 @@ body,
   --color-input: var(--input);
   --color-ring: var(--ring);
 }
+
+@layer components {
+  .hud-btn {
+    border: 1px solid var(--border);
+    padding: 0.35rem 0.8rem;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgb(255 255 255 / 0.6);
+    cursor: pointer;
+  }
+  .hud-btn:hover,
+  .hud-btn-on {
+    color: var(--foreground);
+    border-color: color-mix(in oklch, var(--primary) 60%, transparent);
+  }
+  .hud-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+}
