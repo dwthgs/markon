@@ -1,0 +1,18 @@
+node_modules/
+dist/
+target/
+.vite/
+coverage/
+playwright-report/
+test-results/
+.DS_Store
+*.log
+.env
+.env.*
+.wrangler/
+.dev.vars
+
+# Model and voice binaries are fetched by models/manifest.json, never committed.
+models/*
+!models/manifest.json
+!models/README.md
