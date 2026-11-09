@@ -261,6 +261,12 @@ importers:
         specifier: 5.1.0
         version: 5.1.0(@types/node@24.10.1)(vite@8.3.7(@types/node@24.10.1)(jiti@2.7.0))
 
+  services/relay:
+    devDependencies:
+      vitest:
+        specifier: 5.1.0
+        version: 5.1.0(@types/node@24.10.1)(vite@8.3.7(@types/node@24.10.1)(jiti@2.7.0))
+
 packages:
 
   '@babel/code-frame@7.29.7':
