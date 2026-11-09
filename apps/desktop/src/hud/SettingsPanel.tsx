@@ -48,7 +48,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         }
       }}
     >
-      <h2 className="mb-2 font-heading text-sm tracking-[.25em] text-primary">SETTINGS</h2>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="font-heading text-sm tracking-[.25em] text-primary">SETTINGS</h2>
+        <button type="button" className="hud-btn py-0.5" onClick={onClose}>
+          Close <span className="text-white/40">Esc</span>
+        </button>
+      </div>
       {error ? <p className="mb-2 text-red-300">{error}</p> : null}
 
       <Section title="VOICE">
