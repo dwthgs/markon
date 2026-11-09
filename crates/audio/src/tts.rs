@@ -13,6 +13,10 @@ pub trait TtsEngine: Send {
     /// Mono samples at `sample_rate()`.
     fn synth(&mut self, text: &str) -> Result<Vec<f32>, AudioError>;
     fn sample_rate(&self) -> u32;
+    /// Switch to another pinned voice file (already verified against the manifest).
+    fn set_voice(&mut self, _voice: &Path) -> Result<(), AudioError> {
+        Err(AudioError::Model("this engine has one voice".into()))
+    }
 }
 
 /// The two bundled voices. The product name follows the voice.
@@ -48,18 +52,7 @@ pub struct Kokoro {
 impl Kokoro {
     /// All paths must already be verified against the manifest.
     pub fn load(model: &Path, voice: &Path, g2p: G2p) -> Result<Self, AudioError> {
-        let bytes = std::fs::read(voice)?;
-        let styles: Vec<f32> = bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|c| f32::from_le_bytes(*c))
-            .collect();
-        if styles.len() < 256 || !styles.len().is_multiple_of(256) {
-            return Err(AudioError::Model(
-                "voice file has an unexpected shape".into(),
-            ));
-        }
+        let styles = read_styles(voice)?;
         // onnxruntime allows one environment per process.
         static ENV: std::sync::OnceLock<Result<ort::environment::Environment, String>> =
             std::sync::OnceLock::new();
@@ -147,6 +140,26 @@ impl TtsEngine for Kokoro {
     fn sample_rate(&self) -> u32 {
         KOKORO_RATE
     }
+    fn set_voice(&mut self, voice: &Path) -> Result<(), AudioError> {
+        self.styles = read_styles(voice)?;
+        Ok(())
+    }
+}
+
+fn read_styles(voice: &Path) -> Result<Vec<f32>, AudioError> {
+    let bytes = std::fs::read(voice)?;
+    let styles: Vec<f32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect();
+    if styles.len() < 256 || !styles.len().is_multiple_of(256) {
+        return Err(AudioError::Model(
+            "voice file has an unexpected shape".into(),
+        ));
+    }
+    Ok(styles)
 }
 
 /// speak the opening words of a reply on their own so first audio starts sooner.

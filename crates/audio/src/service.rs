@@ -153,6 +153,17 @@ impl Audio {
         Ok(())
     }
 
+    /// Switch the speaking voice. The file is verified against its pinned checksum first.
+    pub fn set_voice(&self, dir: &Path, voice: Voice) -> Result<(), AudioError> {
+        let path = Manifest::bundled()
+            .entry(voice.manifest_id())?
+            .verify(dir)?;
+        match self.tts.lock().expect("tts").as_mut() {
+            Some(t) => t.set_voice(&path),
+            None => Err(AudioError::NotReady),
+        }
+    }
+
     pub fn is_listening(&self) -> bool {
         self.capture.lock().map(|c| c.is_some()).unwrap_or(false)
     }
