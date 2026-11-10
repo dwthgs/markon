@@ -21,6 +21,8 @@ pub struct WithSources<T> {
     pub cards: CardSink,
     pub memory: Arc<Memory>,
     pub private: Arc<RwLock<Private>>,
+    /// The meaning-search model, when downloaded: items are indexed as they arrive.
+    pub embed: crate::search::SharedEmbedder,
 }
 
 /// Private by route: these sources' text never goes to the cloud model. A local model
@@ -212,12 +214,31 @@ pub async fn what_did_i_miss(
     cards: CardSink,
     memory: Arc<Memory>,
     private: Private,
+    embed: crate::search::SharedEmbedder,
     call: ToolCall,
 ) -> Result<String, String> {
     let now = now_ms();
     let from = since(&memory, call.input["hours"].as_f64(), now);
     let list = sources.read().map(|s| s.clone()).unwrap_or_default();
-    let reports = collect(&list, from, PER_SOURCE).await;
+    let mut reports = collect(&list, from, PER_SOURCE).await;
+    // One person across sources: names from the people table, and everything kept searchable.
+    for r in reports.iter_mut() {
+        if let Ok(items) = &mut r.result {
+            for i in items.iter_mut() {
+                if let Some(name) = crate::search::resolve(&memory, &i.who) {
+                    i.who = name;
+                }
+            }
+        }
+    }
+    let to_index: Vec<Item> = reports
+        .iter()
+        .filter_map(|r| r.result.as_ref().ok())
+        .flatten()
+        .cloned()
+        .collect();
+    let (m, e) = (memory.clone(), embed.clone());
+    tokio::task::spawn_blocking(move || crate::search::index_items(&m, &to_index, &e));
     for r in &reports {
         cards(card_for(call.turn_id, r));
     }
@@ -244,6 +265,7 @@ impl<T: ToolRuntime> ToolRuntime for WithSources<T> {
             self.cards.clone(),
             self.memory.clone(),
             self.private.read().map(|p| p.clone()).unwrap_or_default(),
+            self.embed.clone(),
             call,
         ))
     }

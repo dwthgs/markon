@@ -4,6 +4,7 @@ pub mod github;
 pub mod imap;
 pub mod mac;
 pub mod mcp;
+pub mod search;
 pub mod smtp;
 pub mod telegram;
 pub mod tool;

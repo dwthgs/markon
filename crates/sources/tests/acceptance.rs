@@ -242,6 +242,7 @@ async fn connected(name: &str) -> (WithSources<NoTools>, Seen, Arc<Memory>) {
             cards: Arc::new(move |c| s.lock().unwrap().push(c)),
             memory: memory.clone(),
             private: Default::default(),
+            embed: Default::default(),
         },
         seen,
         memory,
@@ -297,6 +298,7 @@ async fn no_sources_switched_on_means_nothing_is_read() {
         cards: Arc::new(|_| {}),
         memory,
         private: Default::default(),
+        embed: Default::default(),
     };
     let out = rt
         .call(ToolCall {
@@ -407,5 +409,100 @@ async fn private_sources_are_summarised_on_this_mac_or_left_out() {
     assert!(
         public.contains("Rope is in my car"),
         "sources not marked private are unchanged"
+    );
+}
+
+/// Approved folders are searchable (PDFs too), what sources returned is indexed as it arrives,
+/// and one person is known across sources.
+#[tokio::test]
+async fn my_stuff_is_searchable_and_people_are_one_person() {
+    use markon_sources::search::{self, WithSearch};
+    let d = tmp("search");
+    std::fs::create_dir_all(d.join("notes/.hidden")).unwrap();
+    std::fs::write(
+        d.join("notes/trip.md"),
+        "Flights to Lalibela on the 14th, hotel booked.",
+    )
+    .unwrap();
+    std::fs::write(d.join("notes/.env"), "SECRET=1 Lalibela").unwrap();
+    std::fs::write(d.join("notes/.hidden/x.md"), "Lalibela hidden").unwrap();
+    let memory = Arc::new(Memory::open_in_memory().unwrap());
+    let embed: search::SharedEmbedder = Default::default();
+    assert_eq!(
+        search::index_folder(&memory, &d, &embed),
+        1,
+        "secret and hidden files are skipped"
+    );
+    assert_eq!(
+        search::index_folder(&memory, &d, &embed),
+        0,
+        "unchanged files are not read again"
+    );
+
+    contacts_db(&d.join("contacts.abcddb"));
+    search::link_contacts(&memory, &mac::contacts(&d.join("contacts.abcddb")).unwrap());
+    let (rt, _, _) = connected("search-items").await;
+    let rt = WithSources {
+        memory: memory.clone(),
+        ..rt
+    };
+    rt.call(ToolCall {
+        id: "m".into(),
+        name: WHAT_DID_I_MISS.into(),
+        input: json!({}),
+        turn_id: 1,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await; // indexing runs in the background
+
+    let s = WithSearch {
+        inner: NoTools,
+        memory: memory.clone(),
+        embed,
+    };
+    let out = s
+        .call(ToolCall {
+            id: "s".into(),
+            name: "search_my_stuff".into(),
+            input: json!({"query": "Lalibela flights"}),
+            turn_id: 2,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        out.contains("[1] trip.md") && !out.contains("SECRET"),
+        "{out}"
+    );
+    let out = s
+        .call(ToolCall {
+            id: "s2".into(),
+            name: "search_my_stuff".into(),
+            input: json!({"query": "rope car"}),
+            turn_id: 2,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        out.contains("Rope is in my car"),
+        "messages are searchable after what_did_i_miss: {out}"
+    );
+
+    let who = s
+        .call(ToolCall {
+            id: "w".into(),
+            name: "who_is".into(),
+            input: json!({"name": "Sara Tesfaye"}),
+            turn_id: 3,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        who.contains("phone: 155550100") && who.contains("email: sara@work.example"),
+        "{who}"
     );
 }

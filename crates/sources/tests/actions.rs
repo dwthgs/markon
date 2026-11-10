@@ -84,6 +84,7 @@ fn world(name: &str, answer: Decision) -> World {
             cards: sink.clone(),
             memory: memory.clone(),
             private: Default::default(),
+            embed: Default::default(),
         },
         accounts: Arc::new(RwLock::new(Accounts {
             imessage: true,
