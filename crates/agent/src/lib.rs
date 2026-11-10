@@ -138,6 +138,10 @@ pub enum Concurrency {
 pub struct AgentConfig {
     pub max_rounds: usize,
     pub turn_limit: Duration,
+    /// Give up on a reply when nothing arrives for this long (a stalled connection).
+    pub idle_limit: Duration,
+    /// Stop waiting for a round of tool calls after this long.
+    pub tool_limit: Duration,
     pub max_tool_output: usize,
     pub tries: u32,
     pub retry_base: Duration,
@@ -151,6 +155,8 @@ impl Default for AgentConfig {
         Self {
             max_rounds: 12,
             turn_limit: Duration::from_secs(90),
+            idle_limit: Duration::from_secs(45),
+            tool_limit: Duration::from_secs(60),
             max_tool_output: 32 * 1024,
             tries: 3,
             retry_base: Duration::from_millis(500),
@@ -178,7 +184,9 @@ pub struct Agent {
 }
 
 enum RoundEnd {
-    Done { partial: bool },
+    Done {
+        partial: bool,
+    },
     Tools(Vec<ToolCall>),
     /// A server-side tool loop paused; send the same messages again to resume.
     Paused,
@@ -385,7 +393,7 @@ impl Agent {
                     }
                     rounds += 1;
                     let results = tokio::select! {
-                        r = self.run_tools(calls, &tools, cfg.max_tool_output) => r,
+                        r = self.run_tools(calls, &tools, cfg.max_tool_output, cfg.tool_limit) => r,
                         _ = cancelled.changed() => return self.cancelled(turn_id),
                     };
                     msgs.push(Message::tool_results(results));
@@ -435,7 +443,16 @@ impl Agent {
         loop {
             let before = text.len();
             let end = self
-                .round(provider, req.clone(), turn_id, msgs, text, usage, cancelled)
+                .round(
+                    provider,
+                    req.clone(),
+                    turn_id,
+                    msgs,
+                    text,
+                    usage,
+                    cancelled,
+                    cfg.idle_limit,
+                )
                 .await;
             match end {
                 // A deprecated model falls back to the route's default, and the user is told.
@@ -480,6 +497,7 @@ impl Agent {
         text: &mut String,
         usage: &mut (u64, u64),
         cancelled: &mut watch::Receiver<u64>,
+        idle: Duration,
     ) -> RoundEnd {
         let mut rx = provider.stream(req);
         let mut blocks = Vec::new();
@@ -490,6 +508,13 @@ impl Agent {
             let d = tokio::select! {
                 d = rx.recv() => d,
                 _ = cancelled.changed() => return RoundEnd::Cancelled,
+                // A stalled connection would otherwise leave Markon thinking forever.
+                _ = tokio::time::sleep(idle) => {
+                    return RoundEnd::Failed(ProviderError::Network(format!(
+                        "no response for {} s",
+                        idle.as_secs()
+                    )));
+                }
             };
             match d {
                 None => break,
@@ -562,7 +587,9 @@ impl Agent {
         calls: Vec<ToolCall>,
         specs: &[ToolSpec],
         cap: usize,
+        limit: Duration,
     ) -> Vec<ToolResult> {
+        let deadline = tokio::time::Instant::now() + limit;
         let known: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         let mut handles = Vec::new();
         for c in calls {
@@ -585,10 +612,18 @@ impl Agent {
             handles.push((c, tokio::spawn(fut)));
         }
         let mut out = Vec::new();
-        for (c, h) in handles {
-            let r = h
-                .await
-                .unwrap_or_else(|e| Err(format!("tool crashed: {e}")));
+        for (c, mut h) in handles {
+            let r = match tokio::time::timeout_at(deadline, &mut h).await {
+                Ok(r) => r.unwrap_or_else(|e| Err(format!("tool crashed: {e}"))),
+                Err(_) => {
+                    h.abort();
+                    Err(format!(
+                        "{} took too long (over {} s), so it was stopped",
+                        c.name,
+                        limit.as_secs()
+                    ))
+                }
+            };
             let (ok, full) = match r {
                 Ok(s) => (true, s),
                 Err(s) => (false, s),

@@ -209,10 +209,14 @@ async fn the_direct_route_offers_web_search_and_keeps_its_blocks() {
             _ => None,
         })
         .collect();
-    assert_eq!(blocks[0]["input"]["query"], "cats", "server tool input is kept");
+    assert_eq!(
+        blocks[0]["input"]["query"], "cats",
+        "server tool input is kept"
+    );
     assert_eq!(blocks[1]["type"], "web_search_tool_result");
     assert!(
-        !out.iter().any(|d| matches!(d, Ok(ChatDelta::ToolCall { .. }))),
+        !out.iter()
+            .any(|d| matches!(d, Ok(ChatDelta::ToolCall { .. }))),
         "server tools are not run locally"
     );
     assert!(out.contains(&Ok(ChatDelta::Stop(StopReason::Paused))));

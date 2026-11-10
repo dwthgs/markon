@@ -20,6 +20,7 @@ impl Relay {
     pub fn new(base_url: &str, device_id: &str, token: KeySource, store: TokenStore) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(60))
             .build()
             .expect("http client");
         Self {

@@ -10,7 +10,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 struct Tools;
 impl ToolRuntime for Tools {
     fn specs(&self) -> Vec<ToolSpec> {
-        ["slow", "fast", "boom", "big"]
+        ["slow", "fast", "boom", "big", "hang"]
             .iter()
             .map(|n| ToolSpec {
                 name: (*n).into(),
@@ -28,6 +28,10 @@ impl ToolRuntime for Tools {
                 }
                 "fast" => Ok("fast done".into()),
                 "big" => Ok("x".repeat(100_000)),
+                "hang" => {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    Ok("never".into())
+                }
                 _ => Err("it broke".into()),
             }
         })
@@ -289,7 +293,9 @@ async fn a_cancelled_turn_leaves_no_history_and_drops_its_cards() {
 
 #[tokio::test]
 async fn cancelling_after_the_user_interrupted_keeps_listening() {
-    let mut fake = FakeProvider::new(vec![FakeProvider::text("a long answer that is still streaming")]);
+    let mut fake = FakeProvider::new(vec![FakeProvider::text(
+        "a long answer that is still streaming",
+    )]);
     fake.delay = Duration::from_millis(30);
     let (a, mut rx) = Agent::new(Arc::new(fake), Arc::new(Tools), AgentConfig::default());
     let a = Arc::new(a);
@@ -302,7 +308,10 @@ async fn cancelling_after_the_user_interrupted_keeps_listening() {
     a.cancel();
     h.await.unwrap();
     let ev = drain(&mut rx).await;
-    assert!(ev.iter().any(|e| matches!(e, AgentEvent::TurnCancelled { .. })));
+    assert!(
+        ev.iter()
+            .any(|e| matches!(e, AgentEvent::TurnCancelled { .. }))
+    );
     assert_eq!(a.state(), AgentState::Listening);
     assert_eq!(states(&ev).last(), Some(&AgentState::Listening));
 }
@@ -318,7 +327,65 @@ async fn a_paused_server_search_is_resumed_without_a_new_user_message() {
     assert_eq!(finished(&ev).text, "Looking. Found it.");
     let second = &fake.requests.lock().unwrap()[1];
     let last = second.messages.last().unwrap();
-    assert_eq!(last.role, Role::Assistant, "resumes from the paused assistant turn");
+    assert_eq!(
+        last.role,
+        Role::Assistant,
+        "resumes from the paused assistant turn"
+    );
+}
+
+#[tokio::test]
+async fn a_reply_that_stalls_ends_with_an_apology_instead_of_thinking_forever() {
+    let mut fake = FakeProvider::new(vec![FakeProvider::text("never arrives")]);
+    fake.delay = Duration::from_secs(3600);
+    let (a, mut rx) = Agent::new(
+        Arc::new(fake),
+        Arc::new(Tools),
+        AgentConfig {
+            idle_limit: Duration::from_millis(100),
+            ..AgentConfig::default()
+        },
+    );
+    let t = std::time::Instant::now();
+    a.submit(UserTurn::voice("hi")).await;
+    assert!(
+        t.elapsed() < Duration::from_secs(2),
+        "gave up in {:?}",
+        t.elapsed()
+    );
+    let ev = drain(&mut rx).await;
+    assert!(finished(&ev).text.to_lowercase().contains("sorry"));
+}
+
+#[tokio::test]
+async fn a_tool_that_never_returns_times_out_and_the_turn_goes_on() {
+    let (a, fake, mut rx) = {
+        let fake = Arc::new(FakeProvider::new(vec![
+            FakeProvider::tools(&[("t1", "hang", json!({}))]),
+            FakeProvider::text("That didn't work."),
+        ]));
+        let (a, rx) = Agent::new(
+            fake.clone(),
+            Arc::new(Tools),
+            AgentConfig {
+                tool_limit: Duration::from_millis(100),
+                ..AgentConfig::default()
+            },
+        );
+        (a, fake, rx)
+    };
+    a.submit(UserTurn::text("go")).await;
+    let ev = drain(&mut rx).await;
+    assert_eq!(finished(&ev).text, "That didn't work.");
+    let second = &fake.requests.lock().unwrap()[1];
+    let result = &second.messages.last().unwrap().content[0];
+    assert_eq!(result["is_error"], true);
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("took too long")
+    );
 }
 
 #[tokio::test]

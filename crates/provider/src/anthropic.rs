@@ -29,6 +29,8 @@ impl MessagesClient {
     pub fn new(base_url: impl Into<String>, auth: Auth, fallbacks: bool) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            // Close a connection that goes silent mid-reply (the agent gives up sooner, at 45 s).
+            .read_timeout(Duration::from_secs(60))
             .build()
             .expect("http client");
         Self {
