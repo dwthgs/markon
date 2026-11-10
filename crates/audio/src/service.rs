@@ -86,6 +86,18 @@ pub(crate) struct Playback {
     /// What the speakers just played, for the echo canceller (mono, at `render_rate`).
     pub(crate) render: Mutex<Vec<f32>>,
     pub(crate) render_rate: AtomicU32,
+    /// The user may be starting to talk over Markon: play at a quarter of the volume.
+    pub(crate) duck: AtomicBool,
+}
+
+impl Playback {
+    /// Silence now: drop queued sentences and the unplayed tail. `active` stays set, so the app's
+    /// own `cancel_speech` still reports the end of playback.
+    pub(crate) fn cut(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.queue.lock().expect("queue").clear();
+        self.duck.store(false, Ordering::SeqCst);
+    }
 }
 
 pub struct Audio {
@@ -112,6 +124,7 @@ impl Audio {
             active: AtomicBool::new(false),
             render: Mutex::new(Vec::new()),
             render_rate: AtomicU32::new(0),
+            duck: AtomicBool::new(false),
         });
         let (jobs, rx) = channel();
         {
@@ -473,8 +486,13 @@ fn open_output(play: Arc<Playback>, sink: EventSink) -> Result<Output, AudioErro
                 mono.clear();
                 {
                     let mut q = play.queue.lock().expect("queue");
+                    let gain = if play.duck.load(Ordering::Relaxed) {
+                        0.25
+                    } else {
+                        1.0
+                    };
                     for frame in data.chunks_mut(channels) {
-                        let s = q.pop_front().unwrap_or(0.0);
+                        let s = q.pop_front().unwrap_or(0.0) * gain;
                         frame.fill(s);
                         mono.push(s);
                     }

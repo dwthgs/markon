@@ -1,7 +1,7 @@
 //! "Hey Markon" / "Hey Markan" / "Hey Mark" without a dedicated wake-word model: an energy detector cuts
 //! short bursts of speech from an always-open microphone, whisper transcribes each burst on device, and
 //! the text is matched against the wake phrase. Audio is never stored or sent anywhere.
-use crate::echo::{BargeIn, Echo};
+use crate::echo::{Barge, BargeIn, Echo};
 use crate::resample::{downmix, resample};
 use crate::service::{AudioEvent, EventSink, Playback, WHISPER_RATE};
 use crate::vad::{EndOfSpeech, Vad};
@@ -15,7 +15,7 @@ const MIN_SEGMENT_MS: usize = 400;
 const MAX_SEGMENT_MS: usize = 8000;
 /// Audio kept from before the detector fires, so the "h" of "hey" is not lost.
 const PRE_ROLL_MS: usize = 300;
-/// Speech kept from before a barge-in is detected (detection itself takes 250 ms).
+/// Speech kept from before a barge-in is confirmed (confirmation itself takes about 150 ms).
 const BARGE_LEAD_MS: usize = 700;
 
 /// Microphone audio (rate, mono samples) said over Markon, waiting for the listening session.
@@ -203,7 +203,13 @@ pub(crate) fn wake_thread(
         .unwrap_or(rate as usize / 100);
     let mut pending: Vec<f32> = Vec::new();
     while !stop.load(Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(30));
+        // Faster while Markon speaks, so an interruption is heard at once.
+        let tick = if play.active.load(Ordering::SeqCst) {
+            10
+        } else {
+            30
+        };
+        std::thread::sleep(Duration::from_millis(tick));
         let fresh = std::mem::take(&mut *shared.lock().expect("wake buf"));
         let played = std::mem::take(&mut *play.render.lock().expect("render"));
         if listening.load(Ordering::SeqCst) {
@@ -237,11 +243,18 @@ pub(crate) fn wake_thread(
                     if recent.len() > keep {
                         recent.drain(..recent.len() - keep);
                     }
-                    if barge.push(c) {
-                        // The words that triggered it belong to the user's request: hand them over.
-                        *handoff.lock().expect("handoff") = (rate, std::mem::take(&mut recent));
-                        barged = Some(std::time::Instant::now());
-                        sink(AudioEvent::BargeIn);
+                    match barge.push(c) {
+                        // Falter at once, like a person who hears someone start to speak.
+                        Barge::Hint => play.duck.store(true, Ordering::SeqCst),
+                        Barge::Quiet => play.duck.store(false, Ordering::SeqCst),
+                        Barge::Confirmed => {
+                            // Stop right here, without waiting for the app, then tell it.
+                            play.cut();
+                            // The words that triggered it belong to the user's request: hand them over.
+                            *handoff.lock().expect("handoff") = (rate, std::mem::take(&mut recent));
+                            barged = Some(std::time::Instant::now());
+                            sink(AudioEvent::BargeIn);
+                        }
                     }
                 }
             }
@@ -250,6 +263,7 @@ pub(crate) fn wake_thread(
         }
         barge.reset();
         recent.clear();
+        play.duck.store(false, Ordering::SeqCst);
         if let Some(at) = barged {
             // Markon has stopped; keep collecting until the listening session opens the mic.
             if at.elapsed() < Duration::from_secs(3) {

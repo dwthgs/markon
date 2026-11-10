@@ -46,28 +46,31 @@ impl Echo {
     }
 }
 
-/// Sustained speech in the cleaned signal: 250 ms of voiced frames within 400 ms.
+/// Speech in the cleaned signal, in two stages: a hint (duck Markon's voice at once) and a confirmed
+/// barge-in (stop). Judged over the last 250 ms.
+#[derive(Default)]
 pub struct BargeIn {
     window: std::collections::VecDeque<bool>,
     noise: f32,
 }
 
-const WINDOW_FRAMES: usize = 40;
-const VOICED_FRAMES: usize = 25;
-const MIN_LEVEL: f32 = 0.02;
-
-impl Default for BargeIn {
-    fn default() -> Self {
-        Self {
-            window: std::collections::VecDeque::with_capacity(WINDOW_FRAMES),
-            noise: 0.0,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Barge {
+    Quiet,
+    /// A few voiced frames: maybe the user, maybe a noise.
+    Hint,
+    /// Sustained speech: the user is talking over Markon.
+    Confirmed,
 }
 
+const WINDOW_FRAMES: usize = 25;
+const HINT_FRAMES: usize = 5;
+const CONFIRM_FRAMES: usize = 15;
+const MIN_LEVEL: f32 = 0.02;
+
 impl BargeIn {
-    /// Feed one cleaned 10 ms frame. True when the user is talking over Markon.
-    pub fn push(&mut self, frame: &[f32]) -> bool {
+    /// Feed one cleaned 10 ms frame.
+    pub fn push(&mut self, frame: &[f32]) -> Barge {
         let rms = (frame.iter().map(|x| x * x).sum::<f32>() / frame.len().max(1) as f32).sqrt();
         let voiced = rms > MIN_LEVEL.max(self.noise * 4.0);
         if !voiced {
@@ -77,7 +80,11 @@ impl BargeIn {
             self.window.pop_front();
         }
         self.window.push_back(voiced);
-        self.window.iter().filter(|v| **v).count() >= VOICED_FRAMES
+        match self.window.iter().filter(|v| **v).count() {
+            n if n >= CONFIRM_FRAMES => Barge::Confirmed,
+            n if n >= HINT_FRAMES => Barge::Hint,
+            _ => Barge::Quiet,
+        }
     }
 
     pub fn reset(&mut self) {
@@ -138,14 +145,37 @@ mod tests {
     }
 
     #[test]
-    fn sustained_speech_barges_in_but_clicks_and_residue_do_not() {
+    fn hints_within_50_ms_and_confirms_within_150_ms() {
         let mut b = BargeIn::default();
         let quiet = vec![0.005f32; 160];
         let loud: Vec<f32> = (0..160).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
-        assert!(!(0..100).any(|_| b.push(&quiet)), "residual echo");
-        assert!(!(0..10).any(|_| b.push(&loud)), "a 100 ms click");
-        b.reset();
-        let hits = (0..30).position(|_| b.push(&loud));
-        assert_eq!(hits, Some(VOICED_FRAMES - 1), "250 ms of speech");
+        assert!(
+            (0..100).all(|_| b.push(&quiet) == Barge::Quiet),
+            "residual echo"
+        );
+        let states: Vec<Barge> = (0..20).map(|_| b.push(&loud)).collect();
+        assert_eq!(
+            states.iter().position(|s| *s == Barge::Hint),
+            Some(HINT_FRAMES - 1)
+        );
+        assert_eq!(
+            states.iter().position(|s| *s == Barge::Confirmed),
+            Some(CONFIRM_FRAMES - 1)
+        );
+    }
+
+    #[test]
+    fn a_click_only_hints_and_then_fades() {
+        let mut b = BargeIn::default();
+        let quiet = vec![0.005f32; 160];
+        let loud: Vec<f32> = (0..160).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
+        (0..50).for_each(|_| {
+            b.push(&quiet);
+        });
+        let click: Vec<Barge> = (0..8).map(|_| b.push(&loud)).collect();
+        assert!(!click.contains(&Barge::Confirmed));
+        assert!(click.contains(&Barge::Hint));
+        let after: Vec<Barge> = (0..30).map(|_| b.push(&quiet)).collect();
+        assert_eq!(after.last(), Some(&Barge::Quiet));
     }
 }

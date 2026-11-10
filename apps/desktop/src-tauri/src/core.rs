@@ -482,9 +482,10 @@ impl Core {
                     p.speech_started();
                     s
                 };
+                // Always stop, even if a hands-free session is already opening (it then takes the speech).
+                self.audio.cancel_speech();
+                self.agent.cancel();
                 if let Some(session) = session {
-                    self.audio.cancel_speech();
-                    self.agent.cancel();
                     let c = self.clone();
                     tauri::async_runtime::spawn_blocking(move || {
                         c.start_listening(session, crate::ptt::NO_SPEECH)
