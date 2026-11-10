@@ -54,6 +54,30 @@ pub fn specs() -> Vec<ToolSpec> {
             &[],
         ),
         t(
+            "show_image",
+            "Show a picture on Markon's screen. Give a `query` to find a fitting picture (searched on \
+             Wikimedia Commons), or the `url` of an image you found with web search. Prefer this over \
+             opening the browser.",
+            json!({"query": {"type": "string"}, "url": {"type": "string"}, "caption": {"type": "string"}}),
+            &[],
+        ),
+        t(
+            "play_media",
+            "Play audio or video on Markon's screen: a YouTube link, a direct link to an audio or video \
+             file, or the absolute path of a local file in a folder the user approved. Use web search to \
+             find a YouTube link first. For Spotify use the `spotify` tool instead.",
+            json!({"source": {"type": "string"}, "title": {"type": "string"}}),
+            &["source"],
+        ),
+        t(
+            "spotify",
+            "Control the Spotify app and show what is playing on Markon's screen. `action` is play, \
+             pause, next, previous or status. To play something specific, pass its open.spotify.com \
+             link or spotify: URI as `uri` (find it with web search).",
+            json!({"action": {"type": "string", "enum": ["play", "pause", "next", "previous", "status"]}, "uri": {"type": "string"}}),
+            &["action"],
+        ),
+        t(
             "fetch_page",
             "Fetch a web page and return its readable text.",
             json!({"url": {"type": "string"}}),

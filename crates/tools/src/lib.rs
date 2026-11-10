@@ -2,12 +2,13 @@
 //! tiers, each call reported as a canvas card.
 pub mod cards;
 pub mod mcp;
+pub mod media;
 pub mod native;
 pub mod permissions;
 
 use cards::{Card, CardKind, CardSink, CardStatus};
 use markon_agent::{ToolCall, ToolRuntime};
-use markon_platform::Platform;
+use markon_platform::{Platform, SpotifyCommand};
 pub use markon_provider::BoxFuture;
 use markon_provider::ToolSpec;
 use permissions::Permissions;
@@ -38,6 +39,9 @@ fn kind_of(name: &str) -> CardKind {
     match name {
         "list_files" | "read_file" | "write_file" => CardKind::File,
         "fetch_page" => CardKind::Page,
+        "show_image" => CardKind::Image,
+        "play_media" => CardKind::Video,
+        "spotify" => CardKind::Music,
         _ => CardKind::App,
     }
 }
@@ -50,6 +54,17 @@ fn title_of(c: &ToolCall) -> String {
         "open_app" => s("name"),
         "run_command" => s("command"),
         "screenshot_window" => "Window screenshot".into(),
+        "show_image" => c.input["caption"]
+            .as_str()
+            .or(c.input["query"].as_str())
+            .unwrap_or("Picture")
+            .to_string(),
+        "play_media" => c.input["title"]
+            .as_str()
+            .or(c.input["source"].as_str())
+            .unwrap_or("Media")
+            .to_string(),
+        "spotify" => "Spotify".into(),
         other => other.replace("__", " · "),
     }
 }
@@ -267,8 +282,160 @@ impl Runtime {
                     card: json!({"url": url, "title": title, "preview": text}),
                 })
             }
+            "show_image" => self.show_image(input).await.map_err(failed),
+            "play_media" => {
+                let source = Self::arg(input, "source").map_err(failed)?.trim();
+                let title = input["title"].as_str().unwrap_or("").to_string();
+                if let Some(id) = media::youtube_id(source) {
+                    return Ok(Outcome {
+                        model: "Playing it on screen.".into(),
+                        card: json!({"kind": "video", "youtube": id, "title": title, "source": source}),
+                    });
+                }
+                if media::spotify_uri(source).is_some() {
+                    return Err(failed("use the spotify tool for Spotify links".into()));
+                }
+                let kind = media::media_kind(source).ok_or_else(|| {
+                    failed(format!("{source} is not an audio or video file I can play"))
+                })?;
+                let card = if source.starts_with("https://") {
+                    json!({"kind": kind, "url": source, "title": title})
+                } else {
+                    let p = self
+                        .perms
+                        .read(&c.name, source.as_ref())
+                        .await
+                        .map_err(blocked)?;
+                    if !p.is_file() {
+                        return Err(failed(format!("{} is not a file", p.display())));
+                    }
+                    let name = p.file_stem().map(|n| n.to_string_lossy().to_string());
+                    json!({"kind": kind, "path": p, "title": if title.is_empty() { name.unwrap_or_default() } else { title }})
+                };
+                Ok(Outcome {
+                    model: "Playing it on screen.".into(),
+                    card,
+                })
+            }
+            "spotify" => {
+                let uri = input["uri"]
+                    .as_str()
+                    .map(|u| {
+                        media::spotify_uri(u)
+                            .ok_or_else(|| failed(format!("{u} is not a Spotify link")))
+                    })
+                    .transpose()?;
+                let action = Self::arg(input, "action").map_err(failed)?.to_string();
+                if !["play", "pause", "next", "previous", "status"].contains(&action.as_str()) {
+                    return Err(failed(format!("unknown Spotify action {action}")));
+                }
+                let changes_track = matches!(action.as_str(), "next" | "previous")
+                    || (action == "play" && uri.is_some());
+                let platform = self.platform.clone();
+                let mut np = tokio::task::spawn_blocking(move || {
+                    platform.spotify(match (action.as_str(), uri.as_deref()) {
+                        ("play", Some(u)) => SpotifyCommand::PlayUri(u),
+                        ("play", None) => SpotifyCommand::Play,
+                        ("pause", _) => SpotifyCommand::Pause,
+                        ("next", _) => SpotifyCommand::Next,
+                        ("previous", _) => SpotifyCommand::Previous,
+                        _ => SpotifyCommand::Status,
+                    })
+                })
+                .await
+                .map_err(|e| failed(e.to_string()))?
+                .map_err(|e| failed(e.to_string()))?;
+                if changes_track {
+                    // Spotify reports the new track a moment after the command.
+                    tokio::time::sleep(Duration::from_millis(600)).await;
+                    let platform = self.platform.clone();
+                    if let Ok(Ok(n)) = tokio::task::spawn_blocking(move || {
+                        platform.spotify(SpotifyCommand::Status)
+                    })
+                    .await
+                    {
+                        np = n;
+                    }
+                }
+                let model = if np.track.is_empty() {
+                    format!("Spotify is {}.", np.state)
+                } else {
+                    format!("Spotify is {}: {} by {}.", np.state, np.track, np.artist)
+                };
+                Ok(Outcome {
+                    model,
+                    card: json!({"kind": "music", "title": np.track, "track": np.track, "artist": np.artist,
+                        "album": np.album, "artwork": np.artwork, "state": np.state,
+                        "position_s": np.position_s, "duration_s": np.duration_s}),
+                })
+            }
             other => Err(failed(format!("unknown tool {other}"))),
         }
+    }
+
+    /// Find or fetch a picture, check it really is one, and keep it in the cache for the card.
+    async fn show_image(&self, input: &Value) -> Result<Outcome, String> {
+        let caption = input["caption"].as_str().unwrap_or("").to_string();
+        let (url, page, title, credit) = match (input["url"].as_str(), input["query"].as_str()) {
+            (Some(u), _) if u.starts_with("https://") => {
+                (u.to_string(), u.to_string(), caption.clone(), String::new())
+            }
+            (Some(u), _) => return Err(format!("{u} is not an https link")),
+            (None, Some(q)) if !q.trim().is_empty() => {
+                let v: Value = self
+                    .http
+                    .get(media::commons_search_url(q))
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                    .await
+                    .map_err(|e| e.without_url().to_string())?
+                    .json()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let f = media::parse_commons(&v)
+                    .ok_or_else(|| format!("no picture found for \"{q}\""))?;
+                (
+                    f.url,
+                    f.page,
+                    if caption.is_empty() {
+                        f.title
+                    } else {
+                        caption.clone()
+                    },
+                    f.credit,
+                )
+            }
+            _ => return Err("give a query or a url".into()),
+        };
+        let mut r = self
+            .http
+            .get(&url)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
+        if !r.status().is_success() {
+            return Err(format!("the picture returned {}", r.status()));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = r.chunk().await.map_err(|e| e.without_url().to_string())? {
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() > media::MAX_IMAGE {
+                return Err("the picture is larger than 8 MB".into());
+            }
+        }
+        let ext =
+            media::image_ext(&bytes).ok_or("that link is not a JPEG, PNG, GIF or WebP picture")?;
+        let dir = self.cache_dir.join("images");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&url, &mut h);
+        let path = dir.join(format!("{:016x}.{ext}", std::hash::Hasher::finish(&h)));
+        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+        Ok(Outcome {
+            model: format!("Showing \"{title}\" on screen."),
+            card: json!({"kind": "image", "path": path, "title": title, "source": page, "credit": credit}),
+        })
     }
 
     async fn run_mcp(&self, c: &ToolCall) -> Result<Outcome, (bool, String)> {
@@ -333,6 +500,23 @@ impl Runtime {
         };
         match r {
             Ok(o) => {
+                // Media tools decide the card's kind and title from what they found.
+                let mut card = card;
+                if let Some(k) = o
+                    .card
+                    .get("kind")
+                    .and_then(|k| serde_json::from_value(k.clone()).ok())
+                {
+                    card.kind = k;
+                }
+                if let Some(t) = o
+                    .card
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|t| !t.is_empty())
+                {
+                    card.title = t.to_string();
+                }
                 (self.cards)(card.with(CardStatus::Done, o.card));
                 Ok(o.model)
             }

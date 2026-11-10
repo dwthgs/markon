@@ -13,6 +13,10 @@ pub enum CardKind {
     App,
     Result,
     Note,
+    Image,
+    Audio,
+    Video,
+    Music,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
