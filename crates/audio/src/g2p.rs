@@ -1,5 +1,6 @@
 //! Text to Kokoro phonemes without espeak-ng: misaki's Apache-2.0 British dictionaries,
-//! simple suffix rules, number words, and letter-by-letter spelling for anything still unknown.
+//! simple suffix rules, number words, and, for anything still unknown, sounding the word out from
+//! dictionary pieces and letter sounds. Only acronyms are spelled letter by letter.
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -114,6 +115,46 @@ pub fn number_words(n: u64) -> String {
 
 /// The product names are not in misaki's dictionaries; without these they would be spelled out.
 const NAMES: &[(&str, &str)] = &[("Markon", "mˈɑːkɒn"), ("Markan", "mˈɑːkən")];
+
+/// Short all-capital words ("USB", "NASA") and words with no vowels ("BBC", "mph") are read as letters.
+fn is_acronym(w: &str) -> bool {
+    let letters: Vec<char> = w.chars().filter(|c| c.is_alphabetic()).collect();
+    (letters.len() <= 5 && letters.len() > 1 && letters.iter().all(|c| c.is_uppercase()))
+        || !letters.iter().any(|c| "aeiouyAEIOUY".contains(*c))
+}
+
+/// The usual sound of a letter inside a word, not its name.
+fn letter_sound(c: char) -> Option<&'static str> {
+    Some(match c.to_ascii_lowercase() {
+        'a' => "a",
+        'b' => "b",
+        'c' => "k",
+        'd' => "d",
+        'e' => "ɛ",
+        'f' => "f",
+        'g' => "ɡ",
+        'h' => "h",
+        'i' => "ɪ",
+        'j' => "ʤ",
+        'k' => "k",
+        'l' => "l",
+        'm' => "m",
+        'n' => "n",
+        'o' => "ɒ",
+        'p' => "p",
+        'q' => "k",
+        'r' => "ɹ",
+        's' => "s",
+        't' => "t",
+        'u' => "ʌ",
+        'v' => "v",
+        'w' => "w",
+        'x' => "ks",
+        'y' => "i",
+        'z' => "z",
+        _ => return None,
+    })
+}
 
 impl G2p {
     pub fn load(gold: &Path, silver: &Path) -> std::io::Result<Self> {
@@ -236,13 +277,62 @@ impl G2p {
                 }
             }
         }
-        // Still unknown: spell it out.
-        lower
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .filter_map(|c| self.lookup(&c.to_uppercase().to_string()))
-            .collect::<Vec<_>>()
-            .join(" ")
+        if is_acronym(w) {
+            return lower
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .filter_map(|c| self.lookup(&c.to_uppercase().to_string()))
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        self.sound_out(&lower)
+    }
+
+    /// An unknown word ("Addis") as the fewest dictionary pieces ("add" + "is"), with letter sounds
+    /// for anything left over. Only the first piece keeps primary stress.
+    fn sound_out(&self, word: &str) -> String {
+        let chars: Vec<char> = word.chars().filter(|c| c.is_alphabetic()).collect();
+        let n = chars.len();
+        // best[i]: (cost, start of the last piece, its phonemes) for the first i letters.
+        let mut best: Vec<Option<(u32, usize, String)>> = vec![None; n + 1];
+        best[0] = Some((0, 0, String::new()));
+        for end in 1..=n {
+            for start in 0..end {
+                let Some((cost, _, _)) = &best[start] else {
+                    continue;
+                };
+                let piece: String = chars[start..end].iter().collect();
+                let ph = if end - start >= 2 {
+                    self.lookup(&piece).map(|p| (2, p))
+                } else {
+                    letter_sound(chars[start]).map(|p| (3, p.to_string()))
+                };
+                if let Some((c, p)) = ph
+                    && best[end].as_ref().is_none_or(|b| cost + c < b.0)
+                {
+                    best[end] = Some((cost + c, start, p));
+                }
+            }
+        }
+        let mut pieces = Vec::new();
+        let mut i = n;
+        while i > 0 {
+            let Some((_, start, p)) = best[i].clone() else {
+                return String::new();
+            };
+            pieces.push(p);
+            i = start;
+        }
+        pieces.reverse();
+        let mut out = String::new();
+        for (k, p) in pieces.iter().enumerate() {
+            out.push_str(&if k == 0 {
+                p.clone()
+            } else {
+                p.replace('ˈ', "ˌ")
+            });
+        }
+        out
     }
 
     /// Phonemes for a sentence, ready for `tokenize`.
@@ -312,8 +402,19 @@ mod tests {
     }
 
     #[test]
-    fn spells_out_unknown_words_instead_of_guessing() {
+    fn spells_out_acronyms() {
         assert_eq!(g().phonemize("QX"), "kjˈuː ˈɛks");
+    }
+
+    #[test]
+    fn sounds_out_unknown_words_from_known_pieces() {
+        let g = G2p::from_entries(&[
+            ("add", "ˈad"),
+            ("is", "ɪz"),
+            ("baba", "bˈɑːbɑː"),
+            ("A", "ˈA"),
+        ]);
+        assert_eq!(g.phonemize("Addis Ababa"), "ˈadɪz abˌɑːbɑː");
     }
 
     #[test]

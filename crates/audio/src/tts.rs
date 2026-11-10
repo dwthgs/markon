@@ -162,15 +162,17 @@ fn read_styles(voice: &Path) -> Result<Vec<f32>, AudioError> {
     Ok(styles)
 }
 
-/// speak the opening words of a reply on their own so first audio starts sooner.
+/// speak the opening words of a reply on their own so first audio starts sooner. Only at a
+/// comma in the first six words: a split anywhere else puts an unnatural pause mid-phrase.
 pub fn split_first_chunk(sentence: &str) -> (String, Option<String>) {
     let words: Vec<&str> = sentence.split_whitespace().collect();
     if words.len() <= 5 {
         return (sentence.to_string(), None);
     }
-    let comma = words.iter().take(6).position(|w| w.ends_with(','));
-    let n = comma.map(|i| i + 1).unwrap_or(4);
-    (words[..n].join(" "), Some(words[n..].join(" ")))
+    match words.iter().take(6).position(|w| w.ends_with(',')) {
+        Some(i) => (words[..=i].join(" "), Some(words[i + 1..].join(" "))),
+        None => (sentence.to_string(), None),
+    }
 }
 
 #[cfg(test)]
@@ -200,8 +202,9 @@ mod tests {
             "You have three meetings today,"
         );
         assert_eq!(
-            split_first_chunk("Here is the plan for the whole week ahead.").0,
-            "Here is the plan"
+            split_first_chunk("Here is the plan for the whole week ahead."),
+            ("Here is the plan for the whole week ahead.".into(), None),
+            "no comma: no mid-phrase break"
         );
         assert_eq!(split_first_chunk("Done."), ("Done.".into(), None));
     }
