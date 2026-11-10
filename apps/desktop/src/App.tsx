@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from './canvas/Canvas';
 import { layout } from './canvas/layout';
+import { DuckContext } from './canvas/MediaBody';
 import { useCards } from './canvas/useCards';
 import { Controls } from './hud/Controls';
 import { HistoryPanel } from './hud/HistoryPanel';
@@ -69,6 +70,7 @@ export function App() {
       else if (cmd === 'clear') clearAll();
       else if (cmd === 'tidy') tidy();
       else if (cmd === 'focus') focusOn(arg);
+      else if (cmd === 'theme') document.documentElement.dataset.theme = arg;
       else if (cmd === 'bigger') {
         const id = focusId ?? cards.at(-1)?.id;
         if (id) setBig((b) => new Set(b).add(id));
@@ -142,9 +144,9 @@ export function App() {
   return (
     <main
       data-reduced-motion={view.status?.reduced_motion ?? false}
-      className="fixed inset-0 overflow-hidden bg-[radial-gradient(70%_60%_at_50%_45%,#071624_0%,#03060c_70%)]"
+      className="fixed inset-0 overflow-hidden bg-[radial-gradient(70%_60%_at_50%_45%,var(--field-glow)_0%,#03060c_70%)]"
     >
-      <div className="absolute inset-0 grid place-items-center">
+      <div className="absolute inset-0 grid place-items-center [filter:var(--core-filter)]">
         <VoiceCore
           variant="prime"
           state={view.state}
@@ -163,7 +165,9 @@ export function App() {
       >
         {LABEL[view.state]}
       </div>
-      <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} />
+      <DuckContext value={view.state !== 'idle'}>
+        <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} />
+      </DuckContext>
       {/* drag here to move the window; double-click toggles full screen on this display.
           Sits under the controls and notices so their buttons stay clickable. */}
       <div

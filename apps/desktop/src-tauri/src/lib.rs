@@ -79,6 +79,26 @@ fn toggle_full_screen(window: tauri::WebviewWindow) -> Result<(), String> {
     window.set_fullscreen(!on).map_err(|e| e.to_string())
 }
 
+/// The Spotify card's buttons and its progress (polled while the card is on screen).
+#[tauri::command]
+async fn spotify_control(action: String) -> Result<serde_json::Value, String> {
+    use markon_platform::{Platform, SpotifyCommand};
+    let np = tauri::async_runtime::spawn_blocking(move || {
+        markon_platform::MacOs::default().spotify(match action.as_str() {
+            "play" => SpotifyCommand::Play,
+            "pause" => SpotifyCommand::Pause,
+            "next" => SpotifyCommand::Next,
+            "previous" => SpotifyCommand::Previous,
+            _ => SpotifyCommand::Status,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"kind": "music", "track": np.track, "artist": np.artist, "album": np.album,
+        "artwork": np.artwork, "state": np.state, "position_s": np.position_s, "duration_s": np.duration_s}))
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
@@ -212,6 +232,7 @@ pub fn run() {
             cancel,
             hide_window,
             toggle_full_screen,
+            spotify_control,
             quit_app,
             open_mic_settings,
             answer_permission,

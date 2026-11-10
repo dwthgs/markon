@@ -1,4 +1,4 @@
-import type { Card } from './types';
+import { type Card, MEDIA } from './types';
 
 export const CARD_H = 168;
 export const GAP = 12;
@@ -49,7 +49,7 @@ export function layout(
     const order = [...zones].sort((a, b) => a.used - b.used);
     for (const c of group) {
       // A card made bigger still fits as a normal one when the screen is short.
-      const need = big.has(c.id) && slots >= 2 ? 2 : 1;
+      const need = (big.has(c.id) || MEDIA.has(c.kind)) && slots >= 2 ? 2 : 1;
       const z = order.find((z) => z.used + need <= slots);
       if (z) {
         z.ids.push(c.id);

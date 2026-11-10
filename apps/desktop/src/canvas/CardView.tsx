@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { CARD_H, GAP } from './layout';
+import { MediaBody } from './MediaBody';
 import type { Card } from './types';
 
 const KIND = {
@@ -10,6 +11,10 @@ const KIND = {
   app: 'App',
   result: 'Result',
   note: 'Note',
+  image: 'Picture',
+  audio: 'Audio',
+  video: 'Video',
+  music: 'Music',
 } as const;
 
 function elapsed(ms: number) {
@@ -64,6 +69,11 @@ function Body({ card }: { card: Card }) {
   switch (card.kind) {
     case 'agent':
       return <AgentBody card={card} />;
+    case 'image':
+    case 'audio':
+    case 'video':
+    case 'music':
+      return <MediaBody card={card} />;
     case 'result':
     case 'note':
       return <p className="whitespace-pre-wrap">{b.text ?? b.preview ?? ''}</p>;

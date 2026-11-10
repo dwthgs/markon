@@ -1,4 +1,17 @@
-export type CardKind = 'agent' | 'file' | 'page' | 'app' | 'result' | 'note';
+export type CardKind =
+  | 'agent'
+  | 'file'
+  | 'page'
+  | 'app'
+  | 'result'
+  | 'note'
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'music';
+
+/** Cards that show a picture or play something: they get two slots of height. */
+export const MEDIA: ReadonlySet<CardKind> = new Set(['image', 'audio', 'video', 'music']);
 export type CardStatus = 'running' | 'done' | 'error' | 'blocked';
 
 /** Mirrors `markon_tools::cards::Card`. */

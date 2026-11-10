@@ -2,9 +2,20 @@ import { listen } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useState } from 'react';
 import type { AgentEvent } from '@/lib/core';
 import { inTauri } from '@/lib/tauri';
-import type { Card } from './types';
+import type { Card, CardKind } from './types';
 
-const ORDER = { agent: 0, result: 1, page: 2, file: 3, app: 4, note: 5 } as const;
+const ORDER = {
+  agent: 0,
+  result: 1,
+  page: 2,
+  file: 3,
+  app: 4,
+  note: 5,
+  image: 1,
+  audio: 1,
+  video: 1,
+  music: 1,
+} as const satisfies Record<CardKind, number>;
 
 /** The canvas's cards, kept in arrival order. The core owns them; the UI only shows and arranges them. */
 export function useCards() {
