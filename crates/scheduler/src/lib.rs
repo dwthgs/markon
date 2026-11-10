@@ -54,17 +54,33 @@ const FILE_AGENTS: &str = "scheduler.file_agents";
 
 /// The agents that ship with Markon, written to `~/.markon/agents` once.
 pub const BUNDLED: &[(&str, &str)] = &[
-    ("morning-briefing.toml", include_str!("../agents/morning-briefing.toml")),
-    ("meeting-prep.toml", include_str!("../agents/meeting-prep.toml")),
+    (
+        "morning-briefing.toml",
+        include_str!("../agents/morning-briefing.toml"),
+    ),
+    (
+        "meeting-prep.toml",
+        include_str!("../agents/meeting-prep.toml"),
+    ),
+    (
+        "overnight-helper.toml",
+        include_str!("../agents/overnight-helper.toml"),
+    ),
 ];
 
 /// Events that should get a meeting prep card now: starting in 5 to 11 minutes, with other people,
 /// not prepared yet. `(id, start_ms, has_attendees)`.
-pub fn meeting_prep_due(events: &[(String, i64, bool)], now_ms: i64, done: &[String]) -> Vec<String> {
+pub fn meeting_prep_due(
+    events: &[(String, i64, bool)],
+    now_ms: i64,
+    done: &[String],
+) -> Vec<String> {
     events
         .iter()
         .filter(|(id, start, people)| {
-            *people && (now_ms + 5 * 60_000..=now_ms + 11 * 60_000).contains(start) && !done.contains(id)
+            *people
+                && (now_ms + 5 * 60_000..=now_ms + 11 * 60_000).contains(start)
+                && !done.contains(id)
         })
         .map(|(id, ..)| id.clone())
         .collect()
@@ -72,9 +88,11 @@ pub fn meeting_prep_due(events: &[(String, i64, bool)], now_ms: i64, done: &[Str
 
 /// Fill `{title}`, `{start}` and `{attendees}` in the meeting prep prompt.
 pub fn fill(template: &str, title: &str, start: &str, attendees: &str) -> String {
-    template.replace("{title}", title).replace("{start}", start).replace("{attendees}", attendees)
+    template
+        .replace("{title}", title)
+        .replace("{start}", start)
+        .replace("{attendees}", attendees)
 }
-
 
 pub(crate) fn next_after(cron: &str, after: DateTime<Local>) -> Result<i64, String> {
     let c = Cron::from_str(cron).map_err(|e| format!("bad cron line `{cron}`: {e}"))?;
@@ -171,7 +189,11 @@ impl Scheduler {
 
     /// Make the schedules match the agent files: add new ones, update changed ones, drop ones whose
     /// file is gone. Rows that never came from a file (none today) are left alone.
-    pub fn sync_files(&self, agents: &[files::AgentFile], now: DateTime<Local>) -> Result<(), String> {
+    pub fn sync_files(
+        &self,
+        agents: &[files::AgentFile],
+        now: DateTime<Local>,
+    ) -> Result<(), String> {
         let from_files: Vec<String> = self
             .mem
             .preference(FILE_AGENTS)
@@ -188,7 +210,11 @@ impl Scheduler {
             match existing.iter().find(|s| s.name == f.name) {
                 Some(s) if s.cron == *cron && s.agent == f.spec() && s.enabled == f.enabled => {}
                 Some(s) => {
-                    let next = if s.cron == *cron { s.next_run } else { Some(next_after(cron, now)?) };
+                    let next = if s.cron == *cron {
+                        s.next_run
+                    } else {
+                        Some(next_after(cron, now)?)
+                    };
                     self.mem
                         .with(|db| {
                             db.execute(
@@ -216,7 +242,9 @@ impl Scheduler {
                 .with(|db| db.execute("DELETE FROM schedules WHERE name=?1", params![gone]))
                 .map_err(|e| e.to_string())?;
         }
-        self.mem.set_preference(FILE_AGENTS, &serde_json::json!(names)).map_err(|e| e.to_string())
+        self.mem
+            .set_preference(FILE_AGENTS, &serde_json::json!(names))
+            .map_err(|e| e.to_string())
     }
 
     /// Every run is a normal conversation in History.
