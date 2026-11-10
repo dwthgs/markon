@@ -46,7 +46,15 @@ mod tests {
              slack xoxb-1234567890-abcdef aws AKIAABCDEFGHIJKLMNOP db postgres://me:hunter22@db.example/x \
              PASSWORD=\"correct-horse\" -----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY----- end",
         );
-        for leaked in ["sk-ant-api03", "ghp_", "xoxb-", "AKIA", "hunter22", "correct-horse", "MIIE"] {
+        for leaked in [
+            "sk-ant-api03",
+            "ghp_",
+            "xoxb-",
+            "AKIA",
+            "hunter22",
+            "correct-horse",
+            "MIIE",
+        ] {
             assert!(!s.contains(leaked), "{leaked} leaked: {s}");
         }
         assert!(s.contains("anthropic") && s.ends_with("end"));

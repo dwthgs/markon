@@ -35,14 +35,26 @@ fn has_word(text: &str, word: &str) -> bool {
 /// Why this item matters, if it does.
 pub fn matters(item: &Item, rules: &WatchRules) -> Option<String> {
     let who = item.who.to_lowercase();
-    if let Some(p) = rules.people.iter().find(|p| !p.trim().is_empty() && who.contains(&p.trim().to_lowercase())) {
+    if let Some(p) = rules
+        .people
+        .iter()
+        .find(|p| !p.trim().is_empty() && who.contains(&p.trim().to_lowercase()))
+    {
         return Some(format!("from {p}"));
     }
-    rules.words.iter().find(|w| has_word(&item.text, w)).map(|w| format!("says \"{w}\""))
+    rules
+        .words
+        .iter()
+        .find(|w| has_word(&item.text, w))
+        .map(|w| format!("says \"{w}\""))
 }
 
 /// The items worth speaking up for, and the updated list of seen keys (kept to the newest 500).
-pub fn important(items: &[Item], rules: &WatchRules, seen: &[String]) -> (Vec<(Item, String)>, Vec<String>) {
+pub fn important(
+    items: &[Item],
+    rules: &WatchRules,
+    seen: &[String],
+) -> (Vec<(Item, String)>, Vec<String>) {
     let mut seen = seen.to_vec();
     let mut out = Vec::new();
     for i in items {
@@ -64,7 +76,11 @@ pub fn important(items: &[Item], rules: &WatchRules, seen: &[String]) -> (Vec<(I
 
 /// One short sentence to say out loud.
 pub fn sentence(item: &Item) -> String {
-    let who = if item.who.is_empty() { "Someone".to_string() } else { item.who.split(" <").next().unwrap_or(&item.who).to_string() };
+    let who = if item.who.is_empty() {
+        "Someone".to_string()
+    } else {
+        item.who.split(" <").next().unwrap_or(&item.who).to_string()
+    };
     format!("{who} just wrote: {}", crate::clip(&item.text, 120))
 }
 
@@ -87,7 +103,11 @@ mod tests {
 
     #[test]
     fn people_and_words_on_the_list_matter_once() {
-        let rules = WatchRules { enabled: true, people: vec!["Sara".into()], ..Default::default() };
+        let rules = WatchRules {
+            enabled: true,
+            people: vec!["Sara".into()],
+            ..Default::default()
+        };
         let items = [
             item("1", "Sara Tesfaye", "lunch?"),
             item("2", "Bank", "Your card was used: URGENT, call us"),
@@ -95,7 +115,10 @@ mod tests {
             item("4", "Abel", "see you"),
         ];
         let (hits, seen) = important(&items, &rules, &[]);
-        assert_eq!(hits.iter().map(|(i, _)| i.id.as_str()).collect::<Vec<_>>(), ["1", "2"]);
+        assert_eq!(
+            hits.iter().map(|(i, _)| i.id.as_str()).collect::<Vec<_>>(),
+            ["1", "2"]
+        );
         assert_eq!(hits[0].1, "from Sara");
         assert_eq!(seen.len(), 4);
         let (again, _) = important(&items, &rules, &seen);

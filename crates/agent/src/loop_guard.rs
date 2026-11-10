@@ -21,7 +21,10 @@ pub enum Verdict {
 
 impl LoopGuard {
     pub fn check(&mut self, name: &str, input: &Value) -> Verdict {
-        let n = self.counts.entry((name.to_string(), input.to_string())).or_insert(0);
+        let n = self
+            .counts
+            .entry((name.to_string(), input.to_string()))
+            .or_insert(0);
         *n += 1;
         if *n <= MAX_IDENTICAL {
             return Verdict::Run;
@@ -54,6 +57,10 @@ mod tests {
         }
         assert!(matches!(g.check("search", &i), Verdict::Warn(_)));
         assert!(matches!(g.check("search", &i), Verdict::Refuse(_)));
-        assert_eq!(g.check("search", &json!({"q": "news"})), Verdict::Run, "a different input is fine");
+        assert_eq!(
+            g.check("search", &json!({"q": "news"})),
+            Verdict::Run,
+            "a different input is fine"
+        );
     }
 }

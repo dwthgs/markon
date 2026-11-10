@@ -51,17 +51,52 @@ pub fn messages_db(path: &Path, now_ms: i64) {
     )
     .unwrap();
     let ns = |ms: i64| (ms - APPLE_EPOCH_S * 1000) * 1_000_000;
-    let ins = |id: i64, text: Option<&str>, body: Option<Vec<u8>>, h: i64, at: i64, me: i64, read: i64, chat: i64| {
+    let ins = |id: i64,
+               text: Option<&str>,
+               body: Option<Vec<u8>>,
+               h: i64,
+               at: i64,
+               me: i64,
+               read: i64,
+               chat: i64| {
         c.execute(
             "INSERT INTO message VALUES (?1,?2,?3,?4,?5,?6,?7)",
             rusqlite::params![id, text, body, h, ns(at), me, read],
         )
         .unwrap();
-        c.execute("INSERT INTO chat_message_join VALUES (?1,?2)", [chat, id]).unwrap();
+        c.execute("INSERT INTO chat_message_join VALUES (?1,?2)", [chat, id])
+            .unwrap();
     };
-    ins(1, Some("Running late, start without me"), None, 1, now_ms - 3_600_000, 0, 0, 1);
-    ins(2, None, Some(attributed("Rope is in my car")), 2, now_ms - 1_800_000, 0, 1, 2);
-    ins(3, Some("Old news"), None, 1, now_ms - 5 * 86_400_000, 0, 1, 1);
+    ins(
+        1,
+        Some("Running late, start without me"),
+        None,
+        1,
+        now_ms - 3_600_000,
+        0,
+        0,
+        1,
+    );
+    ins(
+        2,
+        None,
+        Some(attributed("Rope is in my car")),
+        2,
+        now_ms - 1_800_000,
+        0,
+        1,
+        2,
+    );
+    ins(
+        3,
+        Some("Old news"),
+        None,
+        1,
+        now_ms - 5 * 86_400_000,
+        0,
+        1,
+        1,
+    );
     ins(4, Some("On my way"), None, 1, now_ms - 600_000, 1, 1, 1);
 }
 
@@ -113,7 +148,11 @@ pub fn calendar_db(path: &Path, now_ms: i64) {
         )
         .unwrap();
     }
-    c.execute("INSERT INTO Participant VALUES (1, 1, 'sara@work.example')", []).unwrap();
+    c.execute(
+        "INSERT INTO Participant VALUES (1, 1, 'sara@work.example')",
+        [],
+    )
+    .unwrap();
 }
 
 pub fn notes_db(path: &Path, now_ms: i64) {
@@ -125,7 +164,8 @@ pub fn notes_db(path: &Path, now_ms: i64) {
     )
     .unwrap();
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    gz.write_all(b"\x08\x00\x12\x1aGear list\n\x1a\x10harness, chalk, rope\x00\x01").unwrap();
+    gz.write_all(b"\x08\x00\x12\x1aGear list\n\x1a\x10harness, chalk, rope\x00\x01")
+        .unwrap();
     let data = gz.finish().unwrap();
     let s = |ms: i64| (ms / 1000 - APPLE_EPOCH_S) as f64;
     c.execute(
@@ -133,11 +173,15 @@ pub fn notes_db(path: &Path, now_ms: i64) {
         [s(now_ms - 7_200_000)],
     )
     .unwrap();
-    c.execute("INSERT INTO ZICNOTEDATA VALUES (1,1,?1)", [data]).unwrap();
+    c.execute("INSERT INTO ZICNOTEDATA VALUES (1,1,?1)", [data])
+        .unwrap();
 }
 
 /// A scripted IMAP server: one login, EXAMINE, UID SEARCH, UID FETCH. Records every command.
-pub async fn imap_server(messages: Vec<(u32, String)>, password: &'static str) -> (u16, Arc<Mutex<Vec<String>>>) {
+pub async fn imap_server(
+    messages: Vec<(u32, String)>,
+    password: &'static str,
+) -> (u16, Arc<Mutex<Vec<String>>>) {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -146,7 +190,9 @@ pub async fn imap_server(messages: Vec<(u32, String)>, password: &'static str) -
         let (c, _) = l.accept().await.unwrap();
         let (r, mut w) = c.into_split();
         let mut r = BufReader::new(r);
-        w.write_all(b"* OK [CAPABILITY IMAP4rev1] mock ready\r\n").await.unwrap();
+        w.write_all(b"* OK [CAPABILITY IMAP4rev1] mock ready\r\n")
+            .await
+            .unwrap();
         loop {
             let mut line = String::new();
             if r.read_line(&mut line).await.unwrap_or(0) == 0 {
@@ -169,16 +215,25 @@ pub async fn imap_server(messages: Vec<(u32, String)>, password: &'static str) -
                 )
             } else if up.starts_with("UID SEARCH") {
                 let ids: Vec<String> = messages.iter().map(|(u, _)| u.to_string()).collect();
-                format!("* SEARCH {}\r\n{tag} OK SEARCH completed\r\n", ids.join(" "))
+                format!(
+                    "* SEARCH {}\r\n{tag} OK SEARCH completed\r\n",
+                    ids.join(" ")
+                )
             } else if up.starts_with("UID FETCH") {
                 let mut out = String::new();
                 for (i, (uid, raw)) in messages.iter().enumerate() {
-                    out.push_str(&format!("* {} FETCH (UID {uid} BODY[] {{{}}}\r\n{raw})\r\n", i + 1, raw.len()));
+                    out.push_str(&format!(
+                        "* {} FETCH (UID {uid} BODY[] {{{}}}\r\n{raw})\r\n",
+                        i + 1,
+                        raw.len()
+                    ));
                 }
                 out.push_str(&format!("{tag} OK FETCH completed\r\n"));
                 out
             } else if up.starts_with("LOGOUT") {
-                let _ = w.write_all(format!("* BYE\r\n{tag} OK LOGOUT completed\r\n").as_bytes()).await;
+                let _ = w
+                    .write_all(format!("* BYE\r\n{tag} OK LOGOUT completed\r\n").as_bytes())
+                    .await;
                 return;
             } else {
                 format!("{tag} BAD unknown\r\n")
@@ -190,7 +245,9 @@ pub async fn imap_server(messages: Vec<(u32, String)>, password: &'static str) -
 }
 
 pub fn mail(from: &str, subject: &str, body: &str, date: &str) -> String {
-    format!("From: {from}\r\nTo: me@example.com\r\nSubject: {subject}\r\nDate: {date}\r\nMessage-ID: <x@y>\r\n\r\n{body}\r\n")
+    format!(
+        "From: {from}\r\nTo: me@example.com\r\nSubject: {subject}\r\nDate: {date}\r\nMessage-ID: <x@y>\r\n\r\n{body}\r\n"
+    )
 }
 
 /// A one-shot HTTP server that answers with `body` and records the request.
@@ -231,12 +288,18 @@ pub mod slack {
     #[tool_router]
     impl Slack {
         pub fn new() -> Self {
-            Self { tool_router: Self::tool_router() }
+            Self {
+                tool_router: Self::tool_router(),
+            }
         }
         #[tool(description = "Search Slack messages")]
-        fn slack_search_public_and_private(&self, Parameters(Search { query }): Parameters<Search>) -> String {
+        fn slack_search_public_and_private(
+            &self,
+            Parameters(Search { query }): Parameters<Search>,
+        ) -> String {
             assert_eq!(query, "is:unread");
-            "#launch, Dawit: the release moved to Thursday\n\nDM, Abel: can you review my PR?".into()
+            "#launch, Dawit: the release moved to Thursday\n\nDM, Abel: can you review my PR?"
+                .into()
         }
     }
     #[tool_handler]

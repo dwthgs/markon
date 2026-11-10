@@ -39,8 +39,11 @@ pub fn open_ro(path: &Path, what: &str) -> Result<Connection, SourceError> {
         Err(e) => return Err(SourceError::Failed(e.to_string())),
         Ok(_) => {}
     }
-    let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| SourceError::Failed(format!("{what}: {e}")))?;
+    let c = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| SourceError::Failed(format!("{what}: {e}")))?;
     let _ = c.busy_timeout(std::time::Duration::from_secs(2));
     Ok(c)
 }
@@ -55,8 +58,15 @@ pub fn attributed_body_text(blob: &[u8]) -> Option<String> {
     let at = blob.windows(8).position(|w| w == b"NSString")? + 8;
     let rest = blob.get(at + 5..)?;
     let (len, start) = match *rest.first()? {
-        0x81 => (u16::from_le_bytes([*rest.get(1)?, *rest.get(2)?]) as usize, 3),
-        0x82 => (u32::from_le_bytes([*rest.get(1)?, *rest.get(2)?, *rest.get(3)?, *rest.get(4)?]) as usize, 5),
+        0x81 => (
+            u16::from_le_bytes([*rest.get(1)?, *rest.get(2)?]) as usize,
+            3,
+        ),
+        0x82 => (
+            u32::from_le_bytes([*rest.get(1)?, *rest.get(2)?, *rest.get(3)?, *rest.get(4)?])
+                as usize,
+            5,
+        ),
         n => (n as usize, 1),
     };
     let bytes = rest.get(start..start + len)?;
@@ -116,9 +126,22 @@ pub fn contacts(path: &Path) -> Result<Vec<Contact>, SourceError> {
         .map_err(&e)?;
     let rows: Vec<(i64, Contact)> = st
         .query_map([], |r| {
-            let parts: Vec<String> = [r.get::<_, Option<String>>(1)?, r.get(2)?].into_iter().flatten().collect();
-            let name = if parts.is_empty() { r.get::<_, Option<String>>(3)?.unwrap_or_default() } else { parts.join(" ") };
-            Ok((r.get(0)?, Contact { name, ..Default::default() }))
+            let parts: Vec<String> = [r.get::<_, Option<String>>(1)?, r.get(2)?]
+                .into_iter()
+                .flatten()
+                .collect();
+            let name = if parts.is_empty() {
+                r.get::<_, Option<String>>(3)?.unwrap_or_default()
+            } else {
+                parts.join(" ")
+            };
+            Ok((
+                r.get(0)?,
+                Contact {
+                    name,
+                    ..Default::default()
+                },
+            ))
         })
         .map_err(&e)?
         .collect::<Result<_, _>>()
@@ -130,11 +153,17 @@ pub fn contacts(path: &Path) -> Result<Vec<Contact>, SourceError> {
     ] {
         let mut st = db.prepare(sql).map_err(&e)?;
         let it = st
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)))
+            .query_map([], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+            })
             .map_err(&e)?;
         for (owner, v) in it.flatten() {
             if let (Some(c), Some(v)) = (by_id.get_mut(&owner), v) {
-                if phone { c.phones.push(v) } else { c.emails.push(v) }
+                if phone {
+                    c.phones.push(v)
+                } else {
+                    c.emails.push(v)
+                }
             }
         }
     }
@@ -183,7 +212,9 @@ pub fn messages(path: &Path, since_ms: i64, names: &Names) -> Result<Vec<Item>, 
             source: "imessage".into(),
             id: id.to_string(),
             who,
-            place: chat.filter(|c| !c.is_empty()).unwrap_or_else(|| "Messages".into()),
+            place: chat
+                .filter(|c| !c.is_empty())
+                .unwrap_or_else(|| "Messages".into()),
             when_ms: message_date_to_ms(date),
             text: clip(&text, 600),
             link: None,
@@ -238,7 +269,9 @@ pub fn events(path: &Path, from_ms: i64, to_ms: i64) -> Result<Vec<Event>, Sourc
         .collect::<Result<_, _>>()
         .map_err(&e)?;
     // Attendees are optional: an older schema without the table still gives events.
-    if let Ok(mut st) = db.prepare("SELECT email FROM Participant WHERE owner_id = ?1 AND email IS NOT NULL") {
+    if let Ok(mut st) =
+        db.prepare("SELECT email FROM Participant WHERE owner_id = ?1 AND email IS NOT NULL")
+    {
         for ev in &mut out {
             ev.attendees = st
                 .query_map([ev.id], |r| r.get::<_, String>(0))
@@ -252,13 +285,22 @@ pub fn events(path: &Path, from_ms: i64, to_ms: i64) -> Result<Vec<Event>, Sourc
 /// Plain text from a note's gzip-compressed protobuf body (their `_extract_text_from_zdata`).
 pub fn note_text(zdata: &[u8]) -> String {
     let mut raw = Vec::new();
-    if flate2::read::GzDecoder::new(zdata).read_to_end(&mut raw).is_err() {
+    if flate2::read::GzDecoder::new(zdata)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
         return String::new();
     }
     let text = String::from_utf8_lossy(&raw);
     let cleaned: String = text
         .chars()
-        .map(|c| if (c.is_control() && c != '\n') || c == '\u{fffd}' { ' ' } else { c })
+        .map(|c| {
+            if (c.is_control() && c != '\n') || c == '\u{fffd}' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -269,11 +311,25 @@ pub fn notes(path: &Path, since_ms: i64) -> Result<Vec<Item>, SourceError> {
     let e = sql_err("Notes");
     let cols: Vec<String> = db
         .prepare("PRAGMA table_info(ZICCLOUDSYNCINGOBJECT)")
-        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(1)).map(|it| it.flatten().collect()))
+        .and_then(|mut st| {
+            st.query_map([], |r| r.get::<_, String>(1))
+                .map(|it| it.flatten().collect())
+        })
         .map_err(&e)?;
     let pick = |names: &[&str]| -> String {
-        let have: Vec<String> = names.iter().filter(|n| cols.iter().any(|c| c == *n)).map(|n| format!("n.{n}")).collect();
-        if have.is_empty() { "NULL".into() } else { format!("COALESCE({})", [have, vec!["NULL".into()]].concat().join(", ")) }
+        let have: Vec<String> = names
+            .iter()
+            .filter(|n| cols.iter().any(|c| c == *n))
+            .map(|n| format!("n.{n}"))
+            .collect();
+        if have.is_empty() {
+            "NULL".into()
+        } else {
+            format!(
+                "COALESCE({})",
+                [have, vec!["NULL".into()]].concat().join(", ")
+            )
+        }
     };
     let (title, modified, snippet) = (
         pick(&["ZTITLE1", "ZTITLE"]),
@@ -299,7 +355,12 @@ pub fn notes(path: &Path, since_ms: i64) -> Result<Vec<Item>, SourceError> {
     Ok(rows
         .flatten()
         .map(|(id, title, modified, snippet, data)| {
-            let body = data.as_deref().map(note_text).filter(|t| !t.is_empty()).or(snippet).unwrap_or_default();
+            let body = data
+                .as_deref()
+                .map(note_text)
+                .filter(|t| !t.is_empty())
+                .or(snippet)
+                .unwrap_or_default();
             Item {
                 source: "notes".into(),
                 id: id.to_string(),
@@ -314,7 +375,9 @@ pub fn notes(path: &Path, since_ms: i64) -> Result<Vec<Item>, SourceError> {
         .collect())
 }
 
-fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, SourceError> + Send + 'static) -> BoxFuture<'static, Result<T, SourceError>> {
+fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, SourceError> + Send + 'static,
+) -> BoxFuture<'static, Result<T, SourceError>> {
     Box::pin(async move {
         tokio::task::spawn_blocking(f)
             .await
@@ -329,7 +392,11 @@ pub struct Messages {
 }
 
 pub fn all_contacts(paths: &[PathBuf]) -> Vec<Contact> {
-    paths.iter().filter_map(|p| contacts(p).ok()).flatten().collect()
+    paths
+        .iter()
+        .filter_map(|p| contacts(p).ok())
+        .flatten()
+        .collect()
 }
 
 impl Source for Messages {
@@ -341,7 +408,13 @@ impl Source for Messages {
     }
     fn fetch(&self, since_ms: i64) -> BoxFuture<'static, Result<Vec<Item>, SourceError>> {
         let (db, contacts) = (self.db.clone(), self.contacts.clone());
-        blocking(move || messages(&db, since_ms, &Names::from_contacts(&all_contacts(&contacts))))
+        blocking(move || {
+            messages(
+                &db,
+                since_ms,
+                &Names::from_contacts(&all_contacts(&contacts)),
+            )
+        })
     }
 }
 
@@ -369,7 +442,11 @@ impl Source for Calendar {
                     who: e.attendees.join(", "),
                     place: e.calendar.clone(),
                     when_ms: e.start_ms,
-                    text: if e.location.is_empty() { e.title } else { format!("{} ({})", e.title, e.location) },
+                    text: if e.location.is_empty() {
+                        e.title
+                    } else {
+                        format!("{} ({})", e.title, e.location)
+                    },
                     link: None,
                     unread: false,
                 })

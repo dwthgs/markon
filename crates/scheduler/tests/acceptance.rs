@@ -120,26 +120,46 @@ fn dropping_an_agent_file_schedules_it_and_removing_it_unschedules_it() {
     let dir = tmp("drop");
     let s = Scheduler::new(Arc::new(Memory::open_in_memory().unwrap()));
     std::fs::write(dir.join("standup.toml"), STANDUP).unwrap();
-    std::fs::write(dir.join("broken.toml"), "name = \"x\"\nprompt = \"y\"\nschedul = \"typo\"\n").unwrap();
+    std::fs::write(
+        dir.join("broken.toml"),
+        "name = \"x\"\nprompt = \"y\"\nschedul = \"typo\"\n",
+    )
+    .unwrap();
     let (agents, problems) = files::load_dir(&dir);
     assert_eq!(agents.len(), 1);
     assert_eq!(problems.len(), 1, "unknown keys are reported: {problems:?}");
-    s.sync_files(&agents.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(), at(8, 0, 10)).unwrap();
+    s.sync_files(
+        &agents.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(),
+        at(8, 0, 10),
+    )
+    .unwrap();
     let list = s.list().unwrap();
     assert_eq!(list[0].name, "Standup notes");
     assert_eq!(list[0].agent.tools, ["what_did_i_miss"]);
     assert_eq!(list[0].agent.max_rounds, Some(3));
-    assert_eq!(s.take_due(at(9, 0, 10)).unwrap().len(), 1, "it runs at its time");
+    assert_eq!(
+        s.take_due(at(9, 0, 10)).unwrap().len(),
+        1,
+        "it runs at its time"
+    );
 
     // Editing the file changes the schedule on the next sync.
     std::fs::write(dir.join("standup.toml"), STANDUP.replace("0 9", "30 9")).unwrap();
     let (agents, _) = files::load_dir(&dir);
-    s.sync_files(&agents.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(), at(9, 5, 10)).unwrap();
+    s.sync_files(
+        &agents.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(),
+        at(9, 5, 10),
+    )
+    .unwrap();
     assert_eq!(s.list().unwrap()[0].cron, "30 9 * * 1-5");
 
     std::fs::remove_file(dir.join("standup.toml")).unwrap();
     let (agents, _) = files::load_dir(&dir);
-    s.sync_files(&agents.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(), at(9, 10, 10)).unwrap();
+    s.sync_files(
+        &agents.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(),
+        at(9, 10, 10),
+    )
+    .unwrap();
     assert!(s.list().unwrap().is_empty());
 }
 
@@ -154,7 +174,10 @@ fn the_bundled_agents_parse_and_are_installed_once() {
     assert!(dir.join("morning-briefing.toml").exists());
     std::fs::remove_file(dir.join("morning-briefing.toml")).unwrap();
     files::install_bundled(&dir, BUNDLED).unwrap();
-    assert!(!dir.join("morning-briefing.toml").exists(), "a file the user deleted stays deleted");
+    assert!(
+        !dir.join("morning-briefing.toml").exists(),
+        "a file the user deleted stays deleted"
+    );
 }
 
 #[test]
@@ -162,7 +185,12 @@ fn meeting_prep_is_due_about_ten_minutes_before_a_meeting_with_people() {
     use markon_scheduler::meeting_prep_due;
     let now = 1_000_000_000_000;
     let ev = |id: &str, mins: i64, people: bool| (id.to_string(), now + mins * 60_000, people);
-    let events = [ev("a", 10, true), ev("b", 10, false), ev("c", 30, true), ev("d", 6, true)];
+    let events = [
+        ev("a", 10, true),
+        ev("b", 10, false),
+        ev("c", 30, true),
+        ev("d", 6, true),
+    ];
     assert_eq!(meeting_prep_due(&events, now, &[]), ["a", "d"]);
     assert_eq!(meeting_prep_due(&events, now, &["a".into()]), ["d"]);
 }
@@ -178,7 +206,11 @@ async fn a_file_agent_runs_and_cannot_call_a_tool_off_its_list() {
         fn specs(&self) -> Vec<markon_provider::ToolSpec> {
             ["what_did_i_miss", "run_command"]
                 .iter()
-                .map(|n| markon_provider::ToolSpec { name: (*n).into(), description: String::new(), input_schema: serde_json::json!({"type": "object"}) })
+                .map(|n| markon_provider::ToolSpec {
+                    name: (*n).into(),
+                    description: String::new(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                })
                 .collect()
         }
         fn call(&self, c: ToolCall) -> markon_provider::BoxFuture<'static, Result<String, String>> {
@@ -190,16 +222,40 @@ async fn a_file_agent_runs_and_cannot_call_a_tool_off_its_list() {
     std::fs::write(dir.join("standup.toml"), STANDUP).unwrap();
     let s = Scheduler::new(Arc::new(Memory::open_in_memory().unwrap()));
     let (agents, _) = files::load_dir(&dir);
-    s.sync_files(&agents.into_iter().map(|(_, f)| f).collect::<Vec<_>>(), at(8, 0, 10)).unwrap();
+    s.sync_files(
+        &agents.into_iter().map(|(_, f)| f).collect::<Vec<_>>(),
+        at(8, 0, 10),
+    )
+    .unwrap();
     let due = s.take_due(at(9, 0, 10)).unwrap();
     let fake = Arc::new(FakeProvider::new(vec![
-        FakeProvider::tools(&[("1", "what_did_i_miss", serde_json::json!({})), ("2", "run_command", serde_json::json!({"command": "rm -rf ~"}))]),
+        FakeProvider::tools(&[
+            ("1", "what_did_i_miss", serde_json::json!({})),
+            (
+                "2",
+                "run_command",
+                serde_json::json!({"command": "rm -rf ~"}),
+            ),
+        ]),
         FakeProvider::text("Two PRs merged."),
     ]));
     let tools = Arc::new(Tools(Default::default()));
     let (agent, mut rx) = Agent::new(fake, tools.clone(), AgentConfig::default());
     let spec = &due[0].agent;
-    agent.submit(UserTurn::agent(&spec.prompt, spec.tools.clone(), spec.max_rounds)).await;
-    while tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await.is_ok_and(|e: Option<AgentEvent>| e.is_some()) {}
-    assert_eq!(*tools.0.lock().unwrap(), ["what_did_i_miss"], "run_command never reached the runtime");
+    agent
+        .submit(UserTurn::agent(
+            &spec.prompt,
+            spec.tools.clone(),
+            spec.max_rounds,
+        ))
+        .await;
+    while tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok_and(|e: Option<AgentEvent>| e.is_some())
+    {}
+    assert_eq!(
+        *tools.0.lock().unwrap(),
+        ["what_did_i_miss"],
+        "run_command never reached the runtime"
+    );
 }

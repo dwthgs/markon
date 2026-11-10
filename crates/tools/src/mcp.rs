@@ -3,10 +3,10 @@
 use crate::BoxFuture;
 use markon_platform::Platform;
 use markon_provider::ToolSpec;
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::transport::{AuthClient, AuthorizationManager};
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::transport::{AuthClient, AuthorizationManager};
 use rmcp::{RoleClient, ServiceExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,11 +24,17 @@ const MAX_RESTARTS: u32 = 3;
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ServerStatus {
     Starting,
-    Online { tools: usize },
-    NeedsRuntime { command: String },
+    Online {
+        tools: usize,
+    },
+    NeedsRuntime {
+        command: String,
+    },
     /// An OAuth server with no saved sign-in: the user signs in from settings.
     NeedsSignIn,
-    Offline { reason: String },
+    Offline {
+        reason: String,
+    },
 }
 
 /// One entry of `mcp.json`: either a command (stdio) or a URL (streamable HTTP).
@@ -87,12 +93,17 @@ const NEEDS_SIGN_IN: &str = "needs sign-in";
 
 pub fn connector_for(name: &str, cfg: &ServerConfig, platform: Arc<dyn Platform>) -> Connector {
     match cfg.clone() {
-        ServerConfig::Http { url, oauth: Some(_) } => {
+        ServerConfig::Http {
+            url,
+            oauth: Some(_),
+        } => {
             let account = crate::oauth::secret_account(name);
             Arc::new(move || {
                 let (url, account, platform) = (url.clone(), account.clone(), platform.clone());
                 Box::pin(async move {
-                    let mut m = AuthorizationManager::new(url.as_str()).await.map_err(|e| e.to_string())?;
+                    let mut m = AuthorizationManager::new(url.as_str())
+                        .await
+                        .map_err(|e| e.to_string())?;
                     m.set_credential_store(crate::oauth::KeychainStore { platform, account });
                     if !m.initialize_from_store().await.map_err(|e| e.to_string())? {
                         return Err(NEEDS_SIGN_IN.to_string());
@@ -216,7 +227,11 @@ impl McpServer {
 
     /// Sign in to an OAuth server in the browser, then connect.
     pub async fn sign_in(&self, platform: Arc<dyn Platform>) -> Result<(), String> {
-        let Some(ServerConfig::Http { url, oauth: Some(cfg) }) = &self.config else {
+        let Some(ServerConfig::Http {
+            url,
+            oauth: Some(cfg),
+        }) = &self.config
+        else {
             return Err(format!("{} does not use sign-in", self.name));
         };
         crate::oauth::sign_in(&self.name, url, cfg, platform).await?;
@@ -233,8 +248,12 @@ impl McpServer {
     pub async fn call(&self, tool: &str, args: Value) -> Result<String, String> {
         loop {
             match self.status() {
-                ServerStatus::Offline { reason } => return Err(format!("{} is offline: {reason}", self.name)),
-                ServerStatus::NeedsSignIn => return Err(format!("sign in to {} in settings first", self.name)),
+                ServerStatus::Offline { reason } => {
+                    return Err(format!("{} is offline: {reason}", self.name));
+                }
+                ServerStatus::NeedsSignIn => {
+                    return Err(format!("sign in to {} in settings first", self.name));
+                }
                 _ => {}
             }
             let attempt = {

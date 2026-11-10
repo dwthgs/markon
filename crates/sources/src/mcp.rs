@@ -65,13 +65,22 @@ impl Source for McpSource {
             match server.status() {
                 ServerStatus::Online { .. } => {}
                 ServerStatus::NeedsSignIn => {
-                    return Err(SourceError::NotConnected(format!("sign in to {} in settings", cfg.server)));
+                    return Err(SourceError::NotConnected(format!(
+                        "sign in to {} in settings",
+                        cfg.server
+                    )));
                 }
                 other => {
-                    return Err(SourceError::NotConnected(format!("{} is not connected ({other:?})", cfg.server)));
+                    return Err(SourceError::NotConnected(format!(
+                        "{} is not connected ({other:?})",
+                        cfg.server
+                    )));
                 }
             }
-            let text = server.call(&cfg.tool, cfg.args.clone()).await.map_err(SourceError::Failed)?;
+            let text = server
+                .call(&cfg.tool, cfg.args.clone())
+                .await
+                .map_err(SourceError::Failed)?;
             Ok(items_from_text(&cfg.server, &text))
         })
     }

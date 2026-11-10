@@ -37,7 +37,8 @@ pub fn valid_name(n: &str) -> bool {
         && !n.starts_with('-')
         && !n.ends_with('-')
         && !n.contains("--")
-        && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && n.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn unquote(v: &str) -> String {
@@ -55,8 +56,12 @@ fn unquote(v: &str) -> String {
 /// in the wild need nested front matter.
 pub fn parse(text: &str) -> Result<(Vec<(String, String)>, String), String> {
     let t = text.trim_start_matches('\u{feff}');
-    let rest = t.strip_prefix("---").ok_or("SKILL.md must start with --- front matter")?;
-    let end = rest.find("\n---").ok_or("the front matter is not closed with ---")?;
+    let rest = t
+        .strip_prefix("---")
+        .ok_or("SKILL.md must start with --- front matter")?;
+    let end = rest
+        .find("\n---")
+        .ok_or("the front matter is not closed with ---")?;
     let (front, body) = (&rest[..end], &rest[end + 4..]);
     let mut fields: Vec<(String, String)> = Vec::new();
     let mut lines = front.lines().peekable();
@@ -64,7 +69,9 @@ pub fn parse(text: &str) -> Result<(Vec<(String, String)>, String), String> {
         if line.trim().is_empty() || line.starts_with(' ') || line.starts_with('#') {
             continue;
         }
-        let Some((k, v)) = line.split_once(':') else { continue };
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
         let v = v.trim();
         let value = if v == ">" || v == "|" || v == ">-" || v == "|-" {
             let mut block = Vec::new();
@@ -76,7 +83,10 @@ pub fn parse(text: &str) -> Result<(Vec<(String, String)>, String), String> {
                     break;
                 }
             }
-            block.join(if v.starts_with('>') { " " } else { "\n" }).trim().to_string()
+            block
+                .join(if v.starts_with('>') { " " } else { "\n" })
+                .trim()
+                .to_string()
         } else {
             unquote(v)
         };
@@ -87,7 +97,10 @@ pub fn parse(text: &str) -> Result<(Vec<(String, String)>, String), String> {
 
 pub fn sha256_hex(text: &str) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A skill from its `SKILL.md` text. The folder name must match `name`, as the spec requires.
@@ -96,18 +109,28 @@ pub fn from_text(text: &str, folder: Option<&Path>, trust: Trust) -> Result<Skil
     let get = |k: &str| fields.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
     let name = get("name").ok_or("the front matter has no name")?;
     if !valid_name(&name) {
-        return Err(format!("`{name}` is not a valid skill name (lowercase letters, digits and hyphens)"));
+        return Err(format!(
+            "`{name}` is not a valid skill name (lowercase letters, digits and hyphens)"
+        ));
     }
     if let Some(dir) = folder
         && dir.file_name().is_some_and(|f| f != name.as_str())
     {
         return Err(format!("the folder {} must be named {name}", dir.display()));
     }
-    let description = get("description").filter(|d| !d.trim().is_empty()).ok_or("the front matter has no description")?;
+    let description = get("description")
+        .filter(|d| !d.trim().is_empty())
+        .ok_or("the front matter has no description")?;
     if description.chars().count() > MAX_DESCRIPTION {
         return Err("the description is longer than 1024 characters".into());
     }
-    Ok(Skill { name, description, body, trust, dir: folder.map(Path::to_path_buf) })
+    Ok(Skill {
+        name,
+        description,
+        body,
+        trust,
+        dir: folder.map(Path::to_path_buf),
+    })
 }
 
 /// Whether the folder's `SKILL.md` is exactly what the user approved.
@@ -117,17 +140,34 @@ pub fn approved(dir: &Path, text: &str) -> bool {
 
 /// Every skill in `root/*/SKILL.md`, plus the bundled ones (a folder with a bundled name is skipped).
 pub fn discover(root: &Path, bundled: &[&str]) -> (Vec<Skill>, Vec<String>) {
-    let mut out: Vec<Skill> = bundled.iter().filter_map(|t| from_text(t, None, Trust::Bundled).ok()).collect();
+    let mut out: Vec<Skill> = bundled
+        .iter()
+        .filter_map(|t| from_text(t, None, Trust::Bundled).ok())
+        .collect();
     let mut problems = Vec::new();
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
-        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.join("SKILL.md").is_file()).collect())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.join("SKILL.md").is_file())
+                .collect()
+        })
         .unwrap_or_default();
     dirs.sort();
     for dir in dirs {
-        let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else { continue };
-        let trust = if approved(&dir, &text) { Trust::Yours } else { Trust::Unreviewed };
+        let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else {
+            continue;
+        };
+        let trust = if approved(&dir, &text) {
+            Trust::Yours
+        } else {
+            Trust::Unreviewed
+        };
         match from_text(&text, Some(&dir), trust) {
-            Ok(s) if out.iter().any(|b| b.name == s.name) => problems.push(format!("{} has the name of a built-in skill", dir.display())),
+            Ok(s) if out.iter().any(|b| b.name == s.name) => problems.push(format!(
+                "{} has the name of a built-in skill",
+                dir.display()
+            )),
             Ok(s) => out.push(s),
             Err(e) => problems.push(format!("{}: {e}", dir.display())),
         }
@@ -136,7 +176,9 @@ pub fn discover(root: &Path, bundled: &[&str]) -> (Vec<Skill>, Vec<String>) {
 }
 
 fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// The catalog for the system prompt (their `get_catalog_xml`).
@@ -153,7 +195,10 @@ pub fn catalog(skills: &[Skill]) -> Option<String> {
         s.push_str(&format!(
             "<skill><name>{}</name><trust>{}</trust><description>{}</description></skill>\n",
             k.name,
-            serde_json::to_value(k.trust).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(),
+            serde_json::to_value(k.trust)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default(),
             escape(&k.description)
         ));
     }
@@ -175,7 +220,12 @@ pub fn loaded(k: &Skill) -> String {
         }
     }
     files.sort();
-    let mut out = format!("<skill name=\"{}\" trust=\"{:?}\">\n{}\n</skill>", k.name, k.trust, k.body.trim());
+    let mut out = format!(
+        "<skill name=\"{}\" trust=\"{:?}\">\n{}\n</skill>",
+        k.name,
+        k.trust,
+        k.body.trim()
+    );
     if !files.is_empty() {
         out.push_str(&format!(
             "\nOther files in this skill's folder {} (read them with read_file if the folder is approved): {}",
@@ -217,15 +267,31 @@ mod tests {
         .unwrap();
         assert_eq!(s.description, "Plan a trip: flights and hotels.");
         assert!(s.body.starts_with("# Steps"));
-        let q = from_text("---\nname: q\ndescription: \"Say \\\"hi\\\"\"\n---\nx", None, Trust::Bundled).unwrap();
+        let q = from_text(
+            "---\nname: q\ndescription: \"Say \\\"hi\\\"\"\n---\nx",
+            None,
+            Trust::Bundled,
+        )
+        .unwrap();
         assert_eq!(q.description, "Say \"hi\"");
         assert!(from_text("no front matter", None, Trust::Bundled).is_err());
-        assert!(from_text("---\nname: Bad\ndescription: x\n---\n", None, Trust::Bundled).is_err());
+        assert!(
+            from_text(
+                "---\nname: Bad\ndescription: x\n---\n",
+                None,
+                Trust::Bundled
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn render_round_trips() {
-        let t = render("weekly-report", "Write the \"weekly\" report", "1. Gather\n2. Write");
+        let t = render(
+            "weekly-report",
+            "Write the \"weekly\" report",
+            "1. Gather\n2. Write",
+        );
         let s = from_text(&t, None, Trust::Yours).unwrap();
         assert_eq!(s.description, "Write the \"weekly\" report");
         assert_eq!(s.body.trim(), "1. Gather\n2. Write");
@@ -263,7 +329,11 @@ impl Library {
         let text = render(name, description, body);
         let dir = self.root.join(name);
         from_text(&text, Some(&dir), Trust::Yours)?;
-        if self.bundled.iter().any(|b| from_text(b, None, Trust::Bundled).is_ok_and(|s| s.name == name)) {
+        if self
+            .bundled
+            .iter()
+            .any(|b| from_text(b, None, Trust::Bundled).is_ok_and(|s| s.name == name))
+        {
             return Err(format!("{name} is the name of a built-in skill"));
         }
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -321,7 +391,10 @@ impl<T: markon_agent::ToolRuntime> markon_agent::ToolRuntime for WithSkills<T> {
         v
     }
 
-    fn call(&self, call: markon_agent::ToolCall) -> crate::BoxFuture<'static, Result<String, String>> {
+    fn call(
+        &self,
+        call: markon_agent::ToolCall,
+    ) -> crate::BoxFuture<'static, Result<String, String>> {
         if call.name != LOAD_SKILL && call.name != SAVE_SKILL {
             return self.inner.call(call);
         }
@@ -330,10 +403,21 @@ impl<T: markon_agent::ToolRuntime> markon_agent::ToolRuntime for WithSkills<T> {
             let s = |k: &str| call.input[k].as_str().unwrap_or("").trim().to_string();
             if call.name == LOAD_SKILL {
                 let name = s("name");
-                let skill = lib.all().0.into_iter().find(|k| k.name == name).ok_or_else(|| format!("there is no skill called {name}"))?;
+                let skill = lib
+                    .all()
+                    .0
+                    .into_iter()
+                    .find(|k| k.name == name)
+                    .ok_or_else(|| format!("there is no skill called {name}"))?;
                 if skill.trust == Trust::Unreviewed {
                     perms
-                        .execute(LOAD_SKILL, &format!("Use the unreviewed skill \"{}\": {}", skill.name, skill.description))
+                        .execute(
+                            LOAD_SKILL,
+                            &format!(
+                                "Use the unreviewed skill \"{}\": {}",
+                                skill.name, skill.description
+                            ),
+                        )
                         .await?;
                 }
                 return Ok(loaded(&skill));
@@ -341,7 +425,9 @@ impl<T: markon_agent::ToolRuntime> markon_agent::ToolRuntime for WithSkills<T> {
             let (name, description, body) = (s("name"), s("description"), s("instructions"));
             let text = render(&name, &description, &body);
             from_text(&text, None, Trust::Yours)?;
-            perms.execute(SAVE_SKILL, &format!("Save this skill?\n\n{text}")).await?;
+            perms
+                .execute(SAVE_SKILL, &format!("Save this skill?\n\n{text}"))
+                .await?;
             let dir = lib.save(&name, &description, &body)?;
             Ok(format!("Saved the skill {name} in {}.", dir.display()))
         })

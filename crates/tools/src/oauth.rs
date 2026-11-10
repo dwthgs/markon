@@ -49,10 +49,14 @@ impl CredentialStore for KeychainStore {
     }
     async fn save(&self, c: StoredCredentials) -> Result<(), AuthError> {
         let s = serde_json::to_string(&c).map_err(store_err)?;
-        self.platform.secret_set(&self.account, &s).map_err(store_err)
+        self.platform
+            .secret_set(&self.account, &s)
+            .map_err(store_err)
     }
     async fn clear(&self) -> Result<(), AuthError> {
-        self.platform.secret_delete(&self.account).map_err(store_err)
+        self.platform
+            .secret_delete(&self.account)
+            .map_err(store_err)
     }
 }
 
@@ -63,7 +67,11 @@ pub fn parse_callback(request: &str) -> Option<(String, String)> {
     if url.path() != "/callback" {
         return None;
     }
-    let get = |k: &str| url.query_pairs().find(|(n, _)| n == k).map(|(_, v)| v.to_string());
+    let get = |k: &str| {
+        url.query_pairs()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.to_string())
+    };
     Some((get("code")?, get("state")?))
 }
 
@@ -104,8 +112,15 @@ async fn wait_for_redirect() -> Result<(String, String), String> {
 }
 
 /// Run the whole sign-in: discover, open the browser, wait for the redirect, store the tokens.
-pub async fn sign_in(server: &str, url: &str, cfg: &OAuthConfig, platform: Arc<dyn Platform>) -> Result<(), String> {
-    let mut st = OAuthState::new(url, None).await.map_err(|e| e.to_string())?;
+pub async fn sign_in(
+    server: &str,
+    url: &str,
+    cfg: &OAuthConfig,
+    platform: Arc<dyn Platform>,
+) -> Result<(), String> {
+    let mut st = OAuthState::new(url, None)
+        .await
+        .map_err(|e| e.to_string())?;
     if let OAuthState::Unauthorized(m) = &mut st {
         m.set_credential_store(KeychainStore {
             platform: platform.clone(),
@@ -118,12 +133,19 @@ pub async fn sign_in(server: &str, url: &str, cfg: &OAuthConfig, platform: Arc<d
     if let Some(id) = &cfg.client_id {
         req = req.with_preregistered_client(id.clone());
     }
-    st.start_authorization(req).await.map_err(|e| e.to_string())?;
-    let auth_url = st.get_authorization_url().await.map_err(|e| e.to_string())?;
+    st.start_authorization(req)
+        .await
+        .map_err(|e| e.to_string())?;
+    let auth_url = st
+        .get_authorization_url()
+        .await
+        .map_err(|e| e.to_string())?;
     let waiting = tokio::spawn(wait_for_redirect());
     platform.open_url(&auth_url).map_err(|e| e.to_string())?;
     let (code, state) = waiting.await.map_err(|e| e.to_string())??;
-    st.handle_callback(&code, &state).await.map_err(|e| e.to_string())?;
+    st.handle_callback(&code, &state)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -134,10 +156,15 @@ mod tests {
     #[test]
     fn reads_the_redirect() {
         assert_eq!(
-            parse_callback("GET /callback?code=abc%2F1&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"),
+            parse_callback(
+                "GET /callback?code=abc%2F1&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+            ),
             Some(("abc/1".into(), "xyz".into()))
         );
         assert_eq!(parse_callback("GET /favicon.ico HTTP/1.1\r\n"), None);
-        assert_eq!(parse_callback("GET /callback?error=denied HTTP/1.1\r\n"), None);
+        assert_eq!(
+            parse_callback("GET /callback?error=denied HTTP/1.1\r\n"),
+            None
+        );
     }
 }

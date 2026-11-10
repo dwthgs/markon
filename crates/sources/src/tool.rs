@@ -1,6 +1,6 @@
 //! `what_did_i_miss`: every switched-on source at once, one Source card each, and the items
 //! handed to the model as data.
-use crate::{Report, Sources, SourceError, collect, now_ms};
+use crate::{Report, SourceError, Sources, collect, now_ms};
 use markon_agent::{ToolCall, ToolRuntime};
 use markon_memory::Memory;
 use markon_provider::{BoxFuture, ToolSpec};
@@ -73,7 +73,11 @@ pub fn for_model(reports: &[Report]) -> String {
     for r in reports {
         match &r.result {
             Ok(items) => {
-                out.push_str(&format!("<source name=\"{}\" new=\"{}\">\n", r.label, items.len()));
+                out.push_str(&format!(
+                    "<source name=\"{}\" new=\"{}\">\n",
+                    r.label,
+                    items.len()
+                ));
                 for i in items.iter().take(25) {
                     let mut head = local_time(i.when_ms);
                     if !i.who.is_empty() {
@@ -82,7 +86,12 @@ pub fn for_model(reports: &[Report]) -> String {
                     if !i.place.is_empty() {
                         head.push_str(&format!(" in {}", i.place));
                     }
-                    out.push_str(&format!("- {}{}: {}\n", head.trim(), if i.unread { " (unread)" } else { "" }, i.text));
+                    out.push_str(&format!(
+                        "- {}{}: {}\n",
+                        head.trim(),
+                        if i.unread { " (unread)" } else { "" },
+                        i.text
+                    ));
                 }
                 out.push_str("</source>\n");
             }
@@ -96,7 +105,12 @@ pub fn for_model(reports: &[Report]) -> String {
 
 /// One card per source: how many, the newest few, or why it failed.
 pub fn card_for(turn_id: u64, r: &Report) -> Card {
-    let card = Card::new(format!("source-{turn_id}-{}", r.id), turn_id, CardKind::Source, r.label.clone());
+    let card = Card::new(
+        format!("source-{turn_id}-{}", r.id),
+        turn_id,
+        CardKind::Source,
+        r.label.clone(),
+    );
     match &r.result {
         Ok(items) => card.with(
             CardStatus::Done,
@@ -114,7 +128,12 @@ pub fn card_for(turn_id: u64, r: &Report) -> Card {
 }
 
 /// Run `what_did_i_miss` against `sources`, posting cards to `cards`.
-pub async fn what_did_i_miss(sources: Sources, cards: CardSink, memory: Arc<Memory>, call: ToolCall) -> Result<String, String> {
+pub async fn what_did_i_miss(
+    sources: Sources,
+    cards: CardSink,
+    memory: Arc<Memory>,
+    call: ToolCall,
+) -> Result<String, String> {
     let now = now_ms();
     let from = since(&memory, call.input["hours"].as_f64(), now);
     let list = sources.read().map(|s| s.clone()).unwrap_or_default();
@@ -139,6 +158,11 @@ impl<T: ToolRuntime> ToolRuntime for WithSources<T> {
         if call.name != WHAT_DID_I_MISS {
             return self.inner.call(call);
         }
-        Box::pin(what_did_i_miss(self.sources.clone(), self.cards.clone(), self.memory.clone(), call))
+        Box::pin(what_did_i_miss(
+            self.sources.clone(),
+            self.cards.clone(),
+            self.memory.clone(),
+            call,
+        ))
     }
 }

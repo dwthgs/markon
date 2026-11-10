@@ -55,12 +55,20 @@ pub fn parse(text: &str) -> Result<AgentFile, String> {
 /// Every `*.toml` in `dir`, sorted by file name, with the files that did not parse.
 pub fn load_dir(dir: &Path) -> (Vec<(PathBuf, AgentFile)>, Vec<String>) {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                .collect()
+        })
         .unwrap_or_default();
     paths.sort();
     let (mut ok, mut bad) = (Vec::new(), Vec::new());
     for p in paths {
-        match std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|t| parse(&t)) {
+        match std::fs::read_to_string(&p)
+            .map_err(|e| e.to_string())
+            .and_then(|t| parse(&t))
+        {
             Ok(f) => ok.push((p, f)),
             Err(e) => bad.push(format!("{}: {e}", p.display())),
         }

@@ -113,7 +113,9 @@ impl Runtime {
         }
         let parsed = reqwest::Url::parse(url).map_err(|e| format!("{url} is not a link: {e}"))?;
         if let Some(why) = guard::blocked_url(&parsed).filter(|_| !self.allow_private_hosts) {
-            return Err(format!("Markon does not fetch pages on this Mac or its network: {why}"));
+            return Err(format!(
+                "Markon does not fetch pages on this Mac or its network: {why}"
+            ));
         }
         let fut = async {
             let r = self

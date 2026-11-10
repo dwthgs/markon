@@ -24,7 +24,10 @@ impl GitHub {
 /// `https://api.github.com/repos/o/r/pulls/7` → `https://github.com/o/r/pull/7`.
 pub fn html_link(api: &str) -> Option<String> {
     let rest = api.strip_prefix("https://api.github.com/repos/")?;
-    Some(format!("https://github.com/{}", rest.replace("/pulls/", "/pull/")))
+    Some(format!(
+        "https://github.com/{}",
+        rest.replace("/pulls/", "/pull/")
+    ))
 }
 
 pub fn parse(v: &Value) -> Vec<Item> {
@@ -32,7 +35,12 @@ pub fn parse(v: &Value) -> Vec<Item> {
         .map(|a| {
             a.iter()
                 .map(|n| {
-                    let s = |p: &str| n.pointer(p).and_then(Value::as_str).unwrap_or("").to_string();
+                    let s = |p: &str| {
+                        n.pointer(p)
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string()
+                    };
                     let when = chrono::DateTime::parse_from_rfc3339(&s("/updated_at"))
                         .map(|t| t.timestamp_millis())
                         .unwrap_or(0);
@@ -42,7 +50,14 @@ pub fn parse(v: &Value) -> Vec<Item> {
                         who: s("/repository/full_name"),
                         place: s("/subject/type"),
                         when_ms: when,
-                        text: clip(&format!("{} ({})", s("/subject/title"), s("/reason").replace('_', " ")), 300),
+                        text: clip(
+                            &format!(
+                                "{} ({})",
+                                s("/subject/title"),
+                                s("/reason").replace('_', " ")
+                            ),
+                            300,
+                        ),
                         link: html_link(&s("/subject/url")),
                         unread: n["unread"].as_bool().unwrap_or(true),
                     }
@@ -67,7 +82,8 @@ impl Source for GitHub {
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let url = format!("{}/notifications?since={since}", self.base);
         Box::pin(async move {
-            let token = token.ok_or_else(|| SourceError::NotConnected("no GitHub token saved".into()))?;
+            let token =
+                token.ok_or_else(|| SourceError::NotConnected("no GitHub token saved".into()))?;
             let r = http
                 .get(url)
                 .bearer_auth(token)
@@ -79,10 +95,15 @@ impl Source for GitHub {
                 .map_err(|e| SourceError::Failed(e.without_url().to_string()))?;
             match r.status().as_u16() {
                 200 => {}
-                401 | 403 => return Err(SourceError::NotConnected("GitHub refused the token".into())),
+                401 | 403 => {
+                    return Err(SourceError::NotConnected("GitHub refused the token".into()));
+                }
                 s => return Err(SourceError::Failed(format!("GitHub returned {s}"))),
             }
-            let v: Value = r.json().await.map_err(|e| SourceError::Failed(e.to_string()))?;
+            let v: Value = r
+                .json()
+                .await
+                .map_err(|e| SourceError::Failed(e.to_string()))?;
             Ok(parse(&v))
         })
     }

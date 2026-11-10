@@ -34,7 +34,10 @@ impl Reminders {
     pub fn add(&self, text: &str, due: DateTime<Local>) -> Result<i64, String> {
         self.mem
             .with(|db| {
-                db.execute("INSERT INTO reminders(text, due_ms) VALUES (?1, ?2)", params![text, due.timestamp_millis()])?;
+                db.execute(
+                    "INSERT INTO reminders(text, due_ms) VALUES (?1, ?2)",
+                    params![text, due.timestamp_millis()],
+                )?;
                 Ok(db.last_insert_rowid())
             })
             .map_err(|e| e.to_string())
@@ -61,10 +64,18 @@ impl Reminders {
 /// A bare time already past today means tomorrow.
 pub fn parse_when(s: &str, now: DateTime<Local>) -> Result<DateTime<Local>, String> {
     let t = s.trim().to_lowercase();
-    let bad = || format!("I don't understand the time \"{s}\"; use 15:00, 3pm, \"in 20 minutes\" or 2026-11-11 09:00");
+    let bad = || {
+        format!(
+            "I don't understand the time \"{s}\"; use 15:00, 3pm, \"in 20 minutes\" or 2026-11-11 09:00"
+        )
+    };
     if let Some(rest) = t.strip_prefix("in ") {
         let mut it = rest.split_whitespace();
-        let n: f64 = it.next().map(|n| if n == "a" || n == "an" { "1" } else { n }).and_then(|n| n.parse().ok()).ok_or_else(bad)?;
+        let n: f64 = it
+            .next()
+            .map(|n| if n == "a" || n == "an" { "1" } else { n })
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(bad)?;
         let unit = it.next().ok_or_else(bad)?;
         let mins = if unit.starts_with("min") {
             n
@@ -91,7 +102,10 @@ pub fn parse_when(s: &str, now: DateTime<Local>) -> Result<DateTime<Local>, Stri
         _ => (t.clone(), false, false),
     };
     let (h, m) = match clock.split_once(':') {
-        Some((h, m)) => (h.parse::<u32>().map_err(|_| bad())?, m.parse::<u32>().map_err(|_| bad())?),
+        Some((h, m)) => (
+            h.parse::<u32>().map_err(|_| bad())?,
+            m.parse::<u32>().map_err(|_| bad())?,
+        ),
         None => (clock.parse::<u32>().map_err(|_| bad())?, 0),
     };
     let h = match (pm, am, h) {
@@ -102,7 +116,10 @@ pub fn parse_when(s: &str, now: DateTime<Local>) -> Result<DateTime<Local>, Stri
     };
     let time = NaiveTime::from_hms_opt(h, m, 0).ok_or_else(bad)?;
     let today: NaiveDate = now.date_naive();
-    let mut at = Local.from_local_datetime(&today.and_time(time)).single().ok_or_else(bad)?;
+    let mut at = Local
+        .from_local_datetime(&today.and_time(time))
+        .single()
+        .ok_or_else(bad)?;
     if at <= now {
         at += Duration::days(1);
     }
@@ -142,10 +159,17 @@ impl<T: ToolRuntime> ToolRuntime for WithReminders<T> {
             return self.inner.call(call);
         }
         let r = (|| {
-            let text = call.input["text"].as_str().map(str::trim).filter(|t| !t.is_empty()).ok_or("say what to remind them of")?;
+            let text = call.input["text"]
+                .as_str()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .ok_or("say what to remind them of")?;
             let at = parse_when(call.input["when"].as_str().unwrap_or(""), Local::now())?;
             self.reminders.add(text, at)?;
-            Ok(format!("Reminder set for {}: {text}", at.format("%a %H:%M")))
+            Ok(format!(
+                "Reminder set for {}: {text}",
+                at.format("%a %H:%M")
+            ))
         })();
         Box::pin(async move { r })
     }
@@ -156,7 +180,10 @@ mod tests {
     use super::*;
 
     fn now() -> DateTime<Local> {
-        Local.with_ymd_and_hms(2026, 11, 10, 14, 30, 0).single().unwrap()
+        Local
+            .with_ymd_and_hms(2026, 11, 10, 14, 30, 0)
+            .single()
+            .unwrap()
     }
 
     #[test]
@@ -169,7 +196,11 @@ mod tests {
         assert_eq!(hm("15:00").unwrap(), "10 15:00");
         assert_eq!(hm("3pm").unwrap(), "10 15:00");
         assert_eq!(hm("3:30 pm").unwrap(), "10 15:30");
-        assert_eq!(hm("9am").unwrap(), "11 09:00", "already past today: tomorrow");
+        assert_eq!(
+            hm("9am").unwrap(),
+            "11 09:00",
+            "already past today: tomorrow"
+        );
         assert_eq!(hm("12am").unwrap(), "11 00:00");
         assert_eq!(hm("2026-11-12 09:00").unwrap(), "12 09:00");
         assert!(hm("3").is_err(), "a bare hour is ambiguous");
@@ -179,7 +210,8 @@ mod tests {
     #[test]
     fn a_reminder_is_delivered_once_when_due() {
         let r = Reminders::new(Arc::new(Memory::open_in_memory().unwrap()));
-        r.add("call Sara back", now() + Duration::minutes(10)).unwrap();
+        r.add("call Sara back", now() + Duration::minutes(10))
+            .unwrap();
         assert!(r.take_due(now()).unwrap().is_empty());
         let due = r.take_due(now() + Duration::minutes(10)).unwrap();
         assert_eq!(due.len(), 1);

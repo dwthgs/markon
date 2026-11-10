@@ -473,7 +473,11 @@ impl Memory {
     pub fn preference(&self, key: &str) -> Result<Option<Value>> {
         let v: Option<String> = self
             .db()
-            .query_row("SELECT value_json FROM preferences WHERE key=?1", [key], |r| r.get(0))
+            .query_row(
+                "SELECT value_json FROM preferences WHERE key=?1",
+                [key],
+                |r| r.get(0),
+            )
             .optional()?;
         Ok(v.and_then(|s| serde_json::from_str(&s).ok()))
     }
