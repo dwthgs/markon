@@ -16,6 +16,7 @@ async-trait = "=0.1.92"
 reqwest.workspace = true
 url = "=2.5.8"
 serde.workspace = true
+sha2 = "=0.10.9"
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -7,6 +7,7 @@ pub mod media;
 pub mod native;
 pub mod oauth;
 pub mod permissions;
+pub mod skills;
 
 use cards::{Card, CardKind, CardSink, CardStatus};
 use markon_agent::{ToolCall, ToolRuntime};
