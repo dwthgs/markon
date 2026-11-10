@@ -16,3 +16,6 @@ test-results/
 models/*
 !models/manifest.json
 !models/README.md
+
+# Local listen-test samples
+docs/listen/
