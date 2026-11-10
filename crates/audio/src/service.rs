@@ -99,6 +99,7 @@ pub struct Audio {
     /// True while a listening session holds the microphone (the wake listener steps aside).
     listening: Arc<AtomicBool>,
     wake: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
+    handoff: crate::wake::Handoff,
 }
 
 impl Audio {
@@ -130,6 +131,7 @@ impl Audio {
             first_of_reply: AtomicBool::new(true),
             listening: Arc::new(AtomicBool::new(false)),
             wake: Mutex::new(None),
+            handoff: Default::default(),
         }
     }
 
@@ -146,10 +148,11 @@ impl Audio {
             return;
         }
         let stop = Arc::new(AtomicBool::new(false));
-        let (st, listening, play, sink, stt) = (
+        let (st, listening, play, handoff, sink, stt) = (
             stop.clone(),
             self.listening.clone(),
             self.play.clone(),
+            self.handoff.clone(),
             self.sink.clone(),
             self.stt.clone(),
         );
@@ -159,7 +162,7 @@ impl Audio {
         };
         if let Ok(t) = std::thread::Builder::new()
             .name("markon-wake".into())
-            .spawn(move || crate::wake::wake_thread(st, listening, play, sink, transcribe))
+            .spawn(move || crate::wake::wake_thread(st, listening, play, handoff, sink, transcribe))
         {
             *w = Some((stop, t));
         }
@@ -243,6 +246,12 @@ impl Audio {
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => {
                 self.listening.store(true, Ordering::SeqCst);
+                // Speech said over Markon (barge-in) starts this clip, so its first words are kept.
+                let (r, lead) = std::mem::take(&mut *self.handoff.lock().expect("handoff"));
+                if r == *rate.lock().expect("rate") && !lead.is_empty() {
+                    let mut b = buf.lock().expect("buf");
+                    b.splice(0..0, lead);
+                }
                 *cap = Some(Capture {
                     stop,
                     buf,

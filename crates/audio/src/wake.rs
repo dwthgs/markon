@@ -15,6 +15,12 @@ const MIN_SEGMENT_MS: usize = 400;
 const MAX_SEGMENT_MS: usize = 8000;
 /// Audio kept from before the detector fires, so the "h" of "hey" is not lost.
 const PRE_ROLL_MS: usize = 300;
+/// Speech kept from before a barge-in is detected (detection itself takes 250 ms).
+const BARGE_LEAD_MS: usize = 700;
+
+/// Microphone audio (rate, mono samples) said over Markon, waiting for the listening session.
+pub type Handoff = Arc<Mutex<(u32, Vec<f32>)>>;
+
 /// A wake phrase is short: end the burst after this much silence (a request uses the longer pause).
 pub const WAKE_END_MS: usize = 600;
 
@@ -149,6 +155,7 @@ pub(crate) fn wake_thread(
     stop: Arc<AtomicBool>,
     listening: Arc<AtomicBool>,
     play: Arc<Playback>,
+    handoff: Handoff,
     sink: EventSink,
     transcribe: impl Fn(&[f32]) -> Option<String>,
 ) {
@@ -186,7 +193,10 @@ pub(crate) fn wake_thread(
         eprintln!("[wake] echo canceller unavailable at {rate} Hz: talking over Markon is off");
     }
     let mut barge = BargeIn::default();
-    let mut barged = false;
+    // Set from the barge-in until the listening session takes the microphone.
+    let mut barged: Option<std::time::Instant> = None;
+    let mut recent: Vec<f32> = Vec::new();
+    let keep = rate as usize * BARGE_LEAD_MS / 1000;
     let chunk = echo
         .as_ref()
         .map(Echo::frame_len)
@@ -199,6 +209,7 @@ pub(crate) fn wake_thread(
         if listening.load(Ordering::SeqCst) {
             seg.reset();
             pending.clear();
+            barged = None;
             continue;
         }
         let speaking = play.active.load(Ordering::SeqCst);
@@ -218,8 +229,18 @@ pub(crate) fn wake_thread(
             if let Some(e) = echo.as_mut() {
                 for c in pending[..whole].chunks_exact_mut(chunk) {
                     e.clean(c);
-                    if barge.push(c) && !barged {
-                        barged = true;
+                    if barged.is_some() {
+                        handoff.lock().expect("handoff").1.extend_from_slice(c);
+                        continue;
+                    }
+                    recent.extend_from_slice(c);
+                    if recent.len() > keep {
+                        recent.drain(..recent.len() - keep);
+                    }
+                    if barge.push(c) {
+                        // The words that triggered it belong to the user's request: hand them over.
+                        *handoff.lock().expect("handoff") = (rate, std::mem::take(&mut recent));
+                        barged = Some(std::time::Instant::now());
                         sink(AudioEvent::BargeIn);
                     }
                 }
@@ -228,7 +249,21 @@ pub(crate) fn wake_thread(
             continue;
         }
         barge.reset();
-        barged = false;
+        recent.clear();
+        if let Some(at) = barged {
+            // Markon has stopped; keep collecting until the listening session opens the mic.
+            if at.elapsed() < Duration::from_secs(3) {
+                handoff
+                    .lock()
+                    .expect("handoff")
+                    .1
+                    .extend_from_slice(&pending[..whole]);
+                pending.drain(..whole);
+                continue;
+            }
+            barged = None;
+            handoff.lock().expect("handoff").1.clear();
+        }
         let mut burst = None;
         for c in pending[..whole].chunks(chunk) {
             if let Some(b) = seg.push(c) {
