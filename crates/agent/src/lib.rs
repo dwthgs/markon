@@ -1,5 +1,6 @@
 //! The agent loop: build the prompt from sections, stream the model, run tool calls in
 //! parallel, and keep the Idle → Listening → Thinking → Speaking → Idle state machine honest.
+pub mod loop_guard;
 pub mod scrub;
 
 use markon_provider::*;
@@ -33,19 +34,33 @@ pub enum TurnSource {
 pub struct UserTurn {
     pub text: String,
     pub source: TurnSource,
+    /// The only tools this turn may use (an agent file's list). None means every tool.
+    pub tools: Option<Vec<String>>,
+    /// Tool rounds before the turn must answer. None means the configured limit.
+    pub max_rounds: Option<usize>,
 }
 
 impl UserTurn {
-    pub fn voice(t: &str) -> Self {
+    pub fn new(t: &str, source: TurnSource) -> Self {
         Self {
             text: t.into(),
-            source: TurnSource::Voice,
+            source,
+            tools: None,
+            max_rounds: None,
         }
     }
+    pub fn voice(t: &str) -> Self {
+        Self::new(t, TurnSource::Voice)
+    }
     pub fn text(t: &str) -> Self {
+        Self::new(t, TurnSource::Text)
+    }
+    /// A scheduled agent: its prompt, limited to its own tools.
+    pub fn agent(prompt: &str, tools: Vec<String>, max_rounds: Option<usize>) -> Self {
         Self {
-            text: t.into(),
-            source: TurnSource::Text,
+            tools: Some(tools),
+            max_rounds,
+            ..Self::new(prompt, TurnSource::Schedule)
         }
     }
 }
@@ -281,7 +296,10 @@ impl Agent {
         cancelled.mark_unchanged();
         self.set_state(AgentState::Thinking);
         let started = Instant::now();
-        let cfg = self.cfg.read().expect("cfg lock").clone();
+        let mut cfg = self.cfg.read().expect("cfg lock").clone();
+        if let Some(n) = turn.max_rounds {
+            cfg.max_rounds = n.min(cfg.max_rounds);
+        }
         let provider = self.provider();
         let current_model = || {
             self.cfg
@@ -297,7 +315,14 @@ impl Agent {
             .filter_map(|s| s.render(&turn))
             .collect::<Vec<_>>()
             .join("\n\n");
-        let tools = self.tools.specs();
+        // An allow-list hides every other tool, and run_tools refuses any name not in `tools`.
+        let tools: Vec<ToolSpec> = self
+            .tools
+            .specs()
+            .into_iter()
+            .filter(|t| turn.tools.as_ref().is_none_or(|allowed| allowed.contains(&t.name)))
+            .collect();
+        let mut guard = loop_guard::LoopGuard::default();
         // Work on a copy: history is only committed when the turn finishes, so a cancel leaves nothing behind.
         let mut msgs = self.history();
         msgs.push(Message::user_text(&turn.text));
@@ -395,7 +420,7 @@ impl Agent {
                     }
                     rounds += 1;
                     let results = tokio::select! {
-                        r = self.run_tools(calls, &tools, cfg.max_tool_output, cfg.tool_limit) => r,
+                        r = self.run_tools(calls, &tools, cfg.max_tool_output, cfg.tool_limit, &mut guard) => r,
                         _ = cancelled.changed() => return self.cancelled(turn_id),
                     };
                     msgs.push(Message::tool_results(results));
@@ -591,6 +616,7 @@ impl Agent {
         specs: &[ToolSpec],
         cap: usize,
         limit: Duration,
+        guard: &mut loop_guard::LoopGuard,
     ) -> Vec<ToolResult> {
         let deadline = tokio::time::Instant::now() + limit;
         let known: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
@@ -602,8 +628,21 @@ impl Agent {
                 name: c.name.clone(),
                 input: c.input.clone(),
             });
-            let fut = if known.contains(&c.name.as_str()) {
-                self.tools.call(c.clone())
+            let verdict = guard.check(&c.name, &c.input);
+            let fut: BoxFuture<'static, Result<String, String>> = if let loop_guard::Verdict::Refuse(msg) = verdict {
+                Box::pin(async move { Err(msg) })
+            } else if known.contains(&c.name.as_str()) {
+                let warn = match verdict {
+                    loop_guard::Verdict::Warn(m) => Some(m),
+                    _ => None,
+                };
+                let f = self.tools.call(c.clone());
+                Box::pin(async move {
+                    match (f.await, warn) {
+                        (Ok(out), Some(w)) => Ok(format!("{out}\n[{w}]")),
+                        (r, _) => r,
+                    }
+                })
             } else {
                 let msg = format!(
                     "Unknown tool {}. Available tools: {}",

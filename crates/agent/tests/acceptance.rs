@@ -479,3 +479,58 @@ async fn a_deprecated_model_falls_back_to_the_default_and_says_so() {
     assert_eq!(reqs[0].model, "old-model");
     assert_eq!(reqs[1].model, "fake");
 }
+
+// ---------- Allowed tools and the loop guard ----------
+
+#[tokio::test]
+async fn an_agent_only_sees_and_can_only_call_its_own_tools() {
+    let (a, fake, mut rx) = agent(vec![
+        FakeProvider::tools(&[("1", "fast", json!({})), ("2", "boom", json!({}))]),
+        FakeProvider::text("done"),
+    ]);
+    a.submit(UserTurn::agent("run", vec!["fast".into()], None)).await;
+    let ev = drain(&mut rx).await;
+    let offered: Vec<String> = fake.requests.lock().unwrap()[0].tools.iter().map(|t| t.name.clone()).collect();
+    assert_eq!(offered, ["fast"], "only the allowed tool is offered");
+    let results: Vec<(String, bool, String)> = ev
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolCallFinished { name, ok, output, .. } => Some((name.clone(), *ok, output.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results[0], ("fast".into(), true, "fast done".into()));
+    assert_eq!(results[1].0, "boom");
+    assert!(!results[1].1 && results[1].2.starts_with("Unknown tool boom"), "{:?}", results[1]);
+}
+
+#[tokio::test]
+async fn an_empty_list_means_no_tools_and_a_round_limit_is_kept() {
+    let (a, fake, mut rx) = agent(vec![
+        FakeProvider::tools(&[("1", "fast", json!({}))]),
+        FakeProvider::text("wrapped up"),
+    ]);
+    a.submit(UserTurn::agent("run", vec![], Some(0))).await;
+    let ev = drain(&mut rx).await;
+    assert!(fake.requests.lock().unwrap()[0].tools.is_empty());
+    assert_eq!(finished(&ev).text, "wrapped up");
+}
+
+#[tokio::test]
+async fn the_same_call_over_and_over_is_stopped() {
+    let same = || FakeProvider::tools(&[("x", "fast", json!({"q": 1}))]);
+    let (a, _, mut rx) = agent(vec![same(), same(), same(), same(), same(), FakeProvider::text("ok")]);
+    a.submit(UserTurn::text("loop")).await;
+    let ev = drain(&mut rx).await;
+    let outs: Vec<(bool, String)> = ev
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolCallFinished { ok, output, .. } => Some((*ok, output.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outs.len(), 5);
+    assert!(outs[..3].iter().all(|(ok, o)| *ok && o == "fast done"));
+    assert!(outs[3].0 && outs[3].1.contains("already called 3 times"), "warned first: {:?}", outs[3]);
+    assert!(!outs[4].0 && outs[4].1.contains("already called"), "then refused: {:?}", outs[4]);
+}
