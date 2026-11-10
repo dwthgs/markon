@@ -31,7 +31,12 @@ export interface SettingsView {
     skills: { name: string; description: string; trust: 'bundled' | 'yours' | 'unreviewed' }[];
     skill_problems: string[];
   };
-  sources: { full_disk_access: boolean; github_token: boolean; mail_passwords: boolean[] };
+  sources: {
+    full_disk_access: boolean;
+    github_token: boolean;
+    mail_passwords: boolean[];
+    approvals: [string, string][];
+  };
   usage_today: { provider: string; model: string; tokens_in: number; tokens_out: number }[];
   endpoints: { name: string; host: string; on: boolean; note: string }[];
   data_dir: string;
@@ -54,6 +59,7 @@ export interface SourceSettings {
   mcp: { server: string; tool: string; args: unknown }[];
   telegram: boolean;
   telegram_api_id: number | null;
+  slack_send_tool: string | null;
 }
 
 export type Patch = Partial<Omit<SettingsView['settings'], 'device_id' | 'relay_url'>>;

@@ -196,6 +196,7 @@ mod tests {
                 name: REMEMBER.into(),
                 input: serde_json::json!({"statement": "The user's name is Dev", "subject": "Name"}),
                 turn_id: 7,
+                tainted: false,
             },
         );
         assert!(fut.is_ok());
@@ -210,6 +211,7 @@ mod tests {
                 name: REMEMBER.into(),
                 input: serde_json::json!({"statement": "  "}),
                 turn_id: 7,
+                tainted: false,
             },
         );
         assert!(empty.is_err());

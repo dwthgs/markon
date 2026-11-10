@@ -162,6 +162,27 @@ export function SourcesSection({
         </div>
       </div>
 
+      {view.sources.approvals.length ? (
+        <div>
+          <p>
+            Always yes for:{' '}
+            {view.sources.approvals.map(([tool, who]) => `${tool.replaceAll('_', ' ')} to ${who}`).join(', ')}
+          </p>
+          <button
+            type="button"
+            className="hud-btn mt-1 py-0"
+            onClick={() =>
+              void attempt(async () => {
+                await call('forget_approvals');
+                await reload();
+              })
+            }
+          >
+            Forget every "always yes"
+          </button>
+        </div>
+      ) : null}
+
       <TelegramBlock src={src} set={set} attempt={attempt} reload={reload} />
 
       {oauth.length ? (

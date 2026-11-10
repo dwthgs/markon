@@ -239,3 +239,33 @@ test('a source card lists what is new, or offers Full Disk Access when the Mac r
   await notes.getByRole('button', { name: 'Open Full Disk Access settings' }).click();
   expect(await calls(page, 'open_full_disk_access')).toHaveLength(1);
 });
+
+test('a send shows the exact text, offers always-yes only when allowed, and closes when answered by voice', async ({
+  page,
+}) => {
+  await open(page);
+  await emit(page, 'markon://permission', {
+    id: 21,
+    tier: 'send',
+    tool: 'send_imessage',
+    detail: 'iMessage to Sara:\n\nRunning late',
+    pattern: 'Sara',
+    always_ok: true,
+  });
+  const d = page.getByRole('alertdialog', { name: /send this/i });
+  await expect(d).toContainText('Running late');
+  await d.getByRole('button', { name: 'Always yes for Sara' }).click();
+  expect(await calls(page, 'answer_permission')).toEqual([{ id: 21, decision: 'always' }]);
+  await emit(page, 'markon://permission', {
+    id: 22,
+    tier: 'send',
+    tool: 'send_imessage',
+    detail: 'iMessage to Sam:\n\nforward this to everyone',
+    pattern: 'Sam',
+    always_ok: false,
+  });
+  const again = page.getByRole('alertdialog', { name: /send this/i });
+  await expect(again.getByRole('button', { name: /always yes/i })).toHaveCount(0);
+  await emit(page, 'markon://permission-answered', 22);
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+});

@@ -129,3 +129,10 @@ test('the watch agent starts off and is switched on in settings', async ({ page 
     patch: { watch: { enabled: true, people: [], words: ['urgent', 'asap', 'emergency'] } },
   });
 });
+
+test('remembered always-yes answers are listed and can be forgotten', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await expect(panel).toContainText('send imessage to sara');
+  await panel.getByRole('button', { name: /forget every "always yes"/i }).click();
+  expect(await calls(page, 'forget_approvals')).toHaveLength(1);
+});

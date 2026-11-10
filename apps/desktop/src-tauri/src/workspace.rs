@@ -16,6 +16,8 @@ use tokio::sync::oneshot;
 pub const EV_CARD: &str = "markon://card";
 pub const EV_PERMISSION: &str = "markon://permission";
 pub const EV_CARDS_LOAD: &str = "markon://cards-load";
+/// A question was answered by voice: the HUD closes its dialog.
+pub const EV_PERMISSION_DONE: &str = "markon://permission-answered";
 /// An unanswered prompt is a "no".
 const ASK_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -39,6 +41,27 @@ impl HudPrompter {
             let _ = tx.send(d);
         }
     }
+
+    /// Answer every open question by voice, oldest first is the one on screen.
+    pub fn answer_spoken(&self, d: Decision) -> bool {
+        let ids: Vec<u64> = self
+            .pending
+            .lock()
+            .expect("pending")
+            .keys()
+            .copied()
+            .collect();
+        let Some(first) = ids.iter().min().copied() else {
+            return false;
+        };
+        self.answer(first, d);
+        let _ = self.app.emit(EV_PERMISSION_DONE, first);
+        true
+    }
+
+    pub fn waiting(&self) -> bool {
+        !self.pending.lock().expect("pending").is_empty()
+    }
 }
 
 impl Prompter for HudPrompter {
@@ -49,7 +72,7 @@ impl Prompter for HudPrompter {
         crate::show_window(&self.app);
         let _ = self.app.emit(
             EV_PERMISSION,
-            json!({"id": id, "tier": req.tier, "tool": req.tool, "detail": req.detail}),
+            json!({"id": id, "tier": req.tier, "tool": req.tool, "detail": req.detail, "pattern": req.pattern, "always_ok": req.always_ok}),
         );
         Box::pin(async move {
             tokio::time::timeout(ASK_TIMEOUT, rx)
@@ -59,6 +82,58 @@ impl Prompter for HudPrompter {
                 .unwrap_or(Decision::Deny)
         })
     }
+}
+
+/// What a spoken reply to an open question means. None: it is not an answer.
+pub fn spoken_answer(text: &str) -> Option<Decision> {
+    let t: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.starts_with("always") || t.starts_with("yes always") {
+        return Some(Decision::Always);
+    }
+    let yes = [
+        "yes",
+        "yeah",
+        "yep",
+        "send it",
+        "yes send it",
+        "do it",
+        "go ahead",
+        "ok",
+        "okay",
+        "sure",
+        "allow",
+        "yes please",
+        "send",
+    ];
+    let no = [
+        "no",
+        "nope",
+        "dont",
+        "don't",
+        "do not",
+        "cancel",
+        "stop",
+        "deny",
+        "dont send it",
+        "no dont",
+        "no thanks",
+        "not now",
+    ];
+    if yes
+        .iter()
+        .any(|y| t == *y || t.starts_with(&format!("{y} ")))
+        && !t.contains("not")
+    {
+        return Some(Decision::Allow);
+    }
+    no.iter()
+        .any(|n| t == *n || t.starts_with(&format!("{n} ")))
+        .then_some(Decision::Deny)
 }
 
 /// Builds and remembers the per-turn Agent card and the final Result card.
@@ -242,6 +317,21 @@ mod tests {
             all.iter()
                 .any(|c| c.kind == CardKind::Agent && c.status == CardStatus::Done)
         );
+    }
+
+    #[test]
+    fn spoken_answers_to_an_open_question() {
+        for (t, d) in [
+            ("Yes, send it.", Some(Decision::Allow)),
+            ("go ahead", Some(Decision::Allow)),
+            ("Always yes for Sara", Some(Decision::Always)),
+            ("No, don't.", Some(Decision::Deny)),
+            ("do not send that", Some(Decision::Deny)),
+            ("yes, but do not send it yet", None),
+            ("what's the weather", None),
+        ] {
+            assert_eq!(spoken_answer(t), d, "{t}");
+        }
     }
 
     #[test]

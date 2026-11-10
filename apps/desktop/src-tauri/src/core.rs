@@ -44,6 +44,7 @@ pub struct Core {
     pub sources: markon_sources::Sources,
     pub telegram: Mutex<Option<Arc<markon_sources::telegram::Telegram>>>,
     pub reminders: Arc<markon_scheduler::reminders::Reminders>,
+    pub accounts: Arc<std::sync::RwLock<markon_sources::act::Accounts>>,
     pub skills: markon_tools::skills::Library,
     /// The conversation turns and cards are written to (one per session or scheduled run).
     conv: Arc<Mutex<Option<i64>>>,
@@ -231,30 +232,42 @@ impl Core {
         let provider = provider_for(&settings, platform.clone());
         let pending_facts = crate::remember::PendingFacts::default();
         let servers = tools.mcp.read().map(|m| m.clone()).unwrap_or_default();
-        let sources: markon_sources::Sources = Arc::new(std::sync::RwLock::new(crate::sources::build(
-            &settings.sources,
-            &platform,
-            &servers,
-            None,
-        )));
+        let sources: markon_sources::Sources = Arc::new(std::sync::RwLock::new(
+            crate::sources::build(&settings.sources, &platform, &servers, None),
+        ));
         let reminders = Arc::new(markon_scheduler::reminders::Reminders::new(memory.clone()));
         let skills = markon_tools::skills::Library {
             root: dir.join("skills"),
             bundled: markon_tools::skills::BUNDLED,
         };
+        *tools.perms.approvals.write().expect("approvals") =
+            Arc::new(crate::sources::DbApprovals(memory.clone()));
+        let accounts = Arc::new(std::sync::RwLock::new(crate::sources::accounts(
+            &settings.sources,
+            &platform,
+            &servers,
+            None,
+        )));
         let (mut agent, mut rx) = Agent::new(
             provider,
             Arc::new(crate::remember::WithMemory {
-                inner: markon_sources::tool::WithSources {
-                    inner: markon_tools::skills::WithSkills {
-                        inner: markon_scheduler::reminders::WithReminders {
-                            inner: workspace::shared(&tools),
-                            reminders: reminders.clone(),
+                inner: markon_sources::act::WithActions {
+                    inner: markon_sources::tool::WithSources {
+                        inner: markon_tools::skills::WithSkills {
+                            inner: markon_scheduler::reminders::WithReminders {
+                                inner: workspace::shared(&tools),
+                                reminders: reminders.clone(),
+                            },
+                            library: skills.clone(),
+                            perms: tools.perms.clone(),
                         },
-                        library: skills.clone(),
-                        perms: tools.perms.clone(),
+                        sources: sources.clone(),
+                        cards: card_sink.clone(),
+                        memory: memory.clone(),
                     },
-                    sources: sources.clone(),
+                    accounts: accounts.clone(),
+                    outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
+                    perms: tools.perms.clone(),
                     cards: card_sink.clone(),
                     memory: memory.clone(),
                 },
@@ -267,9 +280,13 @@ impl Core {
         );
         agent.add_section(Arc::new(StaticSection(persona(voice))));
         agent.add_section(Arc::new(crate::remember::RecallSection(memory.clone())));
-        agent.add_section(Arc::new(markon_tools::skills::CatalogSection(skills.clone())));
+        agent.add_section(Arc::new(markon_tools::skills::CatalogSection(
+            skills.clone(),
+        )));
         let scheduler = Scheduler::new(memory.clone());
-        if let Err(e) = markon_scheduler::files::install_bundled(&dir.join("agents"), markon_scheduler::BUNDLED) {
+        if let Err(e) =
+            markon_scheduler::files::install_bundled(&dir.join("agents"), markon_scheduler::BUNDLED)
+        {
             eprintln!("[scheduler] cannot write the bundled agents: {e}");
         }
         let core = Arc::new(Self {
@@ -288,6 +305,7 @@ impl Core {
             sources,
             telegram: Mutex::new(None),
             reminders,
+            accounts,
             skills,
             conv,
             turn_card_ids,
@@ -674,6 +692,19 @@ impl Core {
     }
 
     pub async fn submit(&self, turn: UserTurn) {
+        // While a question is on screen, what the user says next answers it.
+        if self.prompter.waiting() {
+            match crate::workspace::spoken_answer(&turn.text) {
+                Some(d) => {
+                    self.prompter.answer_spoken(d);
+                    return;
+                }
+                None => {
+                    self.prompter
+                        .answer_spoken(markon_tools::permissions::Decision::Deny);
+                }
+            }
+        }
         if crate::voice_commands::handle(self, &turn.text) {
             self.agent.set_state(AgentState::Idle);
             return;
@@ -841,7 +872,11 @@ impl Core {
         self.turn_done.store(false, Ordering::SeqCst);
         *self.last_user.lock().expect("last_user") = name.to_string();
         self.agent
-            .submit(UserTurn::agent(&spec.prompt, spec.tools.clone(), spec.max_rounds))
+            .submit(UserTurn::agent(
+                &spec.prompt,
+                spec.tools.clone(),
+                spec.max_rounds,
+            ))
             .await;
         // The next thing the user says starts a fresh conversation.
         *self.conv.lock().expect("conv") = None;
@@ -884,7 +919,11 @@ impl Core {
                 Err(e) => eprintln!("[scheduler] {e}"),
             }
             for r in self.reminders.take_due(now).unwrap_or_default() {
-                self.notify(format!("reminder-{}", r.id), "Reminder", &format!("Reminder: {}", r.text));
+                self.notify(
+                    format!("reminder-{}", r.id),
+                    "Reminder",
+                    &format!("Reminder: {}", r.text),
+                );
             }
             if tick.is_multiple_of(10) {
                 self.watch().await;
@@ -903,8 +942,13 @@ impl Core {
         }
         let list = self.sources.read().map(|s| s.clone()).unwrap_or_default();
         let since = markon_sources::now_ms() - 3_600_000;
-        let reports = markon_sources::collect(&list, since, std::time::Duration::from_secs(20)).await;
-        let items: Vec<markon_sources::Item> = reports.into_iter().filter_map(|r| r.result.ok()).flatten().collect();
+        let reports =
+            markon_sources::collect(&list, since, std::time::Duration::from_secs(20)).await;
+        let items: Vec<markon_sources::Item> = reports
+            .into_iter()
+            .filter_map(|r| r.result.ok())
+            .flatten()
+            .collect();
         let seen: Vec<String> = self
             .memory
             .preference("watch.seen")
@@ -913,7 +957,9 @@ impl Core {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         let (hits, seen) = markon_sources::watch::important(&items, &rules, &seen);
-        let _ = self.memory.set_preference("watch.seen", &serde_json::json!(seen));
+        let _ = self
+            .memory
+            .set_preference("watch.seen", &serde_json::json!(seen));
         for (item, why) in hits.into_iter().take(3) {
             self.notify(
                 format!("watch-{}-{}", item.source, item.id),
@@ -932,12 +978,14 @@ impl Core {
         if !on {
             return;
         }
-        let db = markon_platform::mac_db(&markon_platform::home(), markon_platform::MacDb::Calendar);
+        let db =
+            markon_platform::mac_db(&markon_platform::home(), markon_platform::MacDb::Calendar);
         let now = markon_sources::now_ms();
-        let Ok(events) = tokio::task::spawn_blocking(move || markon_sources::mac::events(&db, now, now + 15 * 60_000))
-            .await
-            .unwrap_or_else(|e| Err(markon_sources::SourceError::Failed(e.to_string())))
-        else {
+        let Ok(events) = tokio::task::spawn_blocking(move || {
+            markon_sources::mac::events(&db, now, now + 15 * 60_000)
+        })
+        .await
+        .unwrap_or_else(|e| Err(markon_sources::SourceError::Failed(e.to_string()))) else {
             return;
         };
         let done: Vec<String> = self
@@ -947,19 +995,38 @@ impl Core {
             .flatten()
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
-        let keyed: Vec<(String, i64, bool)> =
-            events.iter().map(|e| (format!("{}@{}", e.id, e.start_ms), e.start_ms, !e.attendees.is_empty())).collect();
+        let keyed: Vec<(String, i64, bool)> = events
+            .iter()
+            .map(|e| {
+                (
+                    format!("{}@{}", e.id, e.start_ms),
+                    e.start_ms,
+                    !e.attendees.is_empty(),
+                )
+            })
+            .collect();
         let due = markon_scheduler::meeting_prep_due(&keyed, now, &done);
         let mut done = done;
         for key in due {
-            let Some(e) = events.iter().find(|e| format!("{}@{}", e.id, e.start_ms) == key) else { continue };
-            let start = markon_scheduler::local(e.start_ms).map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
+            let Some(e) = events
+                .iter()
+                .find(|e| format!("{}@{}", e.id, e.start_ms) == key)
+            else {
+                continue;
+            };
+            let start = markon_scheduler::local(e.start_ms)
+                .map(|t| t.format("%H:%M").to_string())
+                .unwrap_or_default();
             let mut spec = prep.spec();
-            spec.prompt = markon_scheduler::fill(&spec.prompt, &e.title, &start, &e.attendees.join(", "));
+            spec.prompt =
+                markon_scheduler::fill(&spec.prompt, &e.title, &start, &e.attendees.join(", "));
             done.push(key);
             let keep = done.len().saturating_sub(200);
-            let _ = self.memory.set_preference("meeting_prep.done", &serde_json::json!(done[keep..]));
-            self.run_agent(&format!("Meeting prep: {}", e.title), &spec).await;
+            let _ = self
+                .memory
+                .set_preference("meeting_prep.done", &serde_json::json!(done[keep..]));
+            self.run_agent(&format!("Meeting prep: {}", e.title), &spec)
+                .await;
         }
     }
 

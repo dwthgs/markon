@@ -25,6 +25,86 @@ pub struct SourceSettings {
     pub telegram: bool,
     /// From my.telegram.org. The matching hash is in the keychain.
     pub telegram_api_id: Option<i32>,
+    /// The send tool on the Slack MCP server (a guess until tested against the real server).
+    pub slack_send_tool: Option<String>,
+}
+
+/// "Always yes" answers, kept in the memory database.
+pub struct DbApprovals(pub Arc<markon_memory::Memory>);
+
+const APPROVALS: &str = "approvals";
+
+impl DbApprovals {
+    pub fn list(&self) -> Vec<(String, String)> {
+        self.0
+            .preference(APPROVALS)
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default()
+    }
+}
+
+impl markon_tools::permissions::ApprovalStore for DbApprovals {
+    fn allowed(&self, tool: &str, pattern: &str) -> bool {
+        self.list()
+            .iter()
+            .any(|(t, p)| t == tool && *p == pattern.to_lowercase())
+    }
+    fn allow_always(&self, tool: &str, pattern: &str) {
+        let mut v = self.list();
+        let entry = (tool.to_string(), pattern.to_lowercase());
+        if !v.contains(&entry) {
+            v.push(entry);
+        }
+        let _ = self.0.set_preference(APPROVALS, &json!(v));
+    }
+}
+
+/// Messages and Calendar through AppleScript.
+pub struct MacOutbox(pub Arc<MacOs>);
+
+impl markon_sources::act::Outbox for MacOutbox {
+    fn imessage(&self, to: &str, text: &str) -> Result<(), String> {
+        self.0.send_imessage(to, text).map_err(|e| e.to_string())
+    }
+    fn event(&self, title: &str, start: &str, minutes: u32) -> Result<(), String> {
+        self.0
+            .add_calendar_event(title, start, minutes)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The accounts the send tools may use: only switched-on sources.
+pub fn accounts(
+    s: &SourceSettings,
+    platform: &Arc<MacOs>,
+    servers: &[Arc<McpServer>],
+    telegram: Option<Arc<Telegram>>,
+) -> markon_sources::act::Accounts {
+    let p = platform.clone();
+    markon_sources::act::Accounts {
+        mail: s.mail.iter().filter(|a| a.enabled).cloned().collect(),
+        mail_password: Some(Arc::new(move |a: &MailAccount| {
+            p.secret_get(&a.secret_account()).ok().flatten()
+        })),
+        slack: s
+            .mcp
+            .iter()
+            .find(|c| c.server == "slack")
+            .and_then(|_| servers.iter().find(|x| x.name == "slack"))
+            .map(|x| {
+                (
+                    x.clone(),
+                    s.slack_send_tool
+                        .clone()
+                        .unwrap_or_else(|| "slack_send_message".into()),
+                )
+            }),
+        telegram: telegram.filter(|_| s.telegram),
+        imessage: s.imessage,
+        calendar: s.calendar,
+    }
 }
 
 fn secret(platform: &Arc<MacOs>, account: String) -> Arc<dyn Fn() -> Option<String> + Send + Sync> {
@@ -47,23 +127,36 @@ pub fn build(
         }));
     }
     if s.calendar {
-        v.push(Arc::new(mac::Calendar { db: markon_platform::mac_db(&home, MacDb::Calendar) }));
+        v.push(Arc::new(mac::Calendar {
+            db: markon_platform::mac_db(&home, MacDb::Calendar),
+        }));
     }
     if s.notes {
-        v.push(Arc::new(mac::Notes { db: markon_platform::mac_db(&home, MacDb::Notes) }));
+        v.push(Arc::new(mac::Notes {
+            db: markon_platform::mac_db(&home, MacDb::Notes),
+        }));
     }
     for a in s.mail.iter().filter(|a| a.enabled) {
-        v.push(Arc::new(Imap::new(a.clone(), secret(platform, a.secret_account()))));
+        v.push(Arc::new(Imap::new(
+            a.clone(),
+            secret(platform, a.secret_account()),
+        )));
     }
     if s.github {
-        v.push(Arc::new(markon_sources::github::GitHub::new(secret(platform, accounts::GITHUB.into()))));
+        v.push(Arc::new(markon_sources::github::GitHub::new(secret(
+            platform,
+            accounts::GITHUB.into(),
+        ))));
     }
     if let (true, Some(t)) = (s.telegram, telegram) {
         v.push(Arc::new(TelegramSource(t)));
     }
     for cfg in &s.mcp {
         if let Some(server) = servers.iter().find(|x| x.name == cfg.server) {
-            v.push(Arc::new(McpSource { cfg: cfg.clone(), server: server.clone() }));
+            v.push(Arc::new(McpSource {
+                cfg: cfg.clone(),
+                server: server.clone(),
+            }));
         }
     }
     v
@@ -74,14 +167,36 @@ pub fn refresh(core: &crate::core::Core) {
     let s = core.settings.lock().expect("settings").sources.clone();
     let servers = core.tools.mcp.read().map(|m| m.clone()).unwrap_or_default();
     let tg = core.telegram.lock().expect("telegram").clone();
-    *core.sources.write().expect("sources") = build(&s, &core.platform, &servers, tg);
+    *core.sources.write().expect("sources") = build(&s, &core.platform, &servers, tg.clone());
+    *core.accounts.write().expect("accounts") = accounts(&s, &core.platform, &servers, tg);
+}
+
+/// "Always yes" answers for settings, and forgetting them.
+#[tauri::command]
+pub fn forget_approvals(core: State<'_, CoreState>) -> Result<(), String> {
+    core.memory
+        .set_preference(APPROVALS, &json!([]))
+        .map_err(|e| e.to_string())
 }
 
 /// Connect Telegram with the saved id, hash and session. Must run inside the async runtime.
 pub fn start_telegram(core: &crate::core::Core) -> Option<Arc<Telegram>> {
-    let id = core.settings.lock().expect("settings").sources.telegram_api_id?;
-    let hash = core.platform.secret_get(accounts::TELEGRAM_API_HASH).ok().flatten()?;
-    let saved = core.platform.secret_get(accounts::TELEGRAM_SESSION).ok().flatten();
+    let id = core
+        .settings
+        .lock()
+        .expect("settings")
+        .sources
+        .telegram_api_id?;
+    let hash = core
+        .platform
+        .secret_get(accounts::TELEGRAM_API_HASH)
+        .ok()
+        .flatten()?;
+    let saved = core
+        .platform
+        .secret_get(accounts::TELEGRAM_SESSION)
+        .ok()
+        .flatten();
     let p = core.platform.clone();
     let store: markon_sources::telegram::Store = Arc::new(move |j| {
         if let Err(e) = p.secret_set(accounts::TELEGRAM_SESSION, j) {
@@ -95,27 +210,42 @@ pub fn start_telegram(core: &crate::core::Core) -> Option<Arc<Telegram>> {
 }
 
 fn telegram(core: &crate::core::Core) -> Result<Arc<Telegram>, String> {
-    core.telegram.lock().expect("telegram").clone().ok_or_else(|| "save the Telegram API id and hash first".into())
+    core.telegram
+        .lock()
+        .expect("telegram")
+        .clone()
+        .ok_or_else(|| "save the Telegram API id and hash first".into())
 }
 
 /// Save the API id (settings) and hash (keychain) from my.telegram.org, then connect.
 #[tauri::command]
-pub async fn telegram_setup(core: State<'_, CoreState>, api_id: i32, api_hash: String) -> Result<(), String> {
+pub async fn telegram_setup(
+    core: State<'_, CoreState>,
+    api_id: i32,
+    api_hash: String,
+) -> Result<(), String> {
     let hash = api_hash.trim();
     if api_id <= 0 || hash.len() != 32 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("the API id is a number and the hash is 32 letters and digits".into());
     }
-    core.platform.secret_set(accounts::TELEGRAM_API_HASH, hash).map_err(|e| e.to_string())?;
+    core.platform
+        .secret_set(accounts::TELEGRAM_API_HASH, hash)
+        .map_err(|e| e.to_string())?;
     {
         let mut s = core.settings.lock().expect("settings");
         s.sources.telegram_api_id = Some(api_id);
         s.save(&core.dir).map_err(|e| e.to_string())?;
     }
-    start_telegram(&core).map(|_| ()).ok_or_else(|| "could not start Telegram".into())
+    start_telegram(&core)
+        .map(|_| ())
+        .ok_or_else(|| "could not start Telegram".into())
 }
 
 #[tauri::command]
-pub async fn telegram_request_code(core: State<'_, CoreState>, phone: String) -> Result<(), String> {
+pub async fn telegram_request_code(
+    core: State<'_, CoreState>,
+    phone: String,
+) -> Result<(), String> {
     telegram(&core)?.request_code(phone.trim()).await
 }
 
@@ -147,12 +277,15 @@ pub fn view(core: &crate::core::Core) -> Value {
         "full_disk_access": core.platform.has_full_disk_access(),
         "github_token": has(accounts::GITHUB),
         "mail_passwords": s.mail.iter().map(|a| has(&a.secret_account())).collect::<Vec<_>>(),
+        "approvals": DbApprovals(core.memory.clone()).list(),
     })
 }
 
 #[tauri::command]
 pub fn open_full_disk_access(core: State<'_, CoreState>) -> Result<(), String> {
-    core.platform.open_full_disk_access_settings().map_err(|e| e.to_string())
+    core.platform
+        .open_full_disk_access_settings()
+        .map_err(|e| e.to_string())
 }
 
 /// Save a source's secret in the keychain: `github` (a token) or `mail` (an app password for `user@host`).
@@ -169,7 +302,9 @@ pub fn set_source_secret(
     if value.is_empty() || value.len() > 512 {
         return Err("that does not look like a password or token".into());
     }
-    core.platform.secret_set(&account, value).map_err(|e| e.to_string())
+    core.platform
+        .secret_set(&account, value)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -180,7 +315,9 @@ pub fn delete_source_secret(
     host: Option<String>,
 ) -> Result<(), String> {
     let account = account_for(&kind, user, host)?;
-    core.platform.secret_delete(&account).map_err(|e| e.to_string())
+    core.platform
+        .secret_delete(&account)
+        .map_err(|e| e.to_string())
 }
 
 fn account_for(kind: &str, user: Option<String>, host: Option<String>) -> Result<String, String> {
@@ -191,7 +328,13 @@ fn account_for(kind: &str, user: Option<String>, host: Option<String>) -> Result
             if user.is_empty() || host.is_empty() || host.contains(char::is_whitespace) {
                 return Err("a mail account needs a user and a host".into());
             }
-            Ok(MailAccount { host, port: 993, user, enabled: true }.secret_account())
+            Ok(MailAccount {
+                host,
+                port: 993,
+                user,
+                enabled: true,
+            }
+            .secret_account())
         }
         _ => Err(format!("unknown source secret {kind}")),
     }
@@ -226,7 +369,12 @@ mod tests {
     fn secrets_go_to_named_keychain_accounts_only() {
         assert_eq!(account_for("github", None, None).unwrap(), "github-token");
         assert_eq!(
-            account_for("mail", Some("me@icloud.com".into()), Some("imap.mail.me.com".into())).unwrap(),
+            account_for(
+                "mail",
+                Some("me@icloud.com".into()),
+                Some("imap.mail.me.com".into())
+            )
+            .unwrap(),
             "mail:me@icloud.com@imap.mail.me.com"
         );
         assert!(account_for("anthropic-api-key", None, None).is_err());

@@ -11,7 +11,7 @@ import { HistoryPanel } from './hud/HistoryPanel';
 import { MicMeter } from './hud/MicMeter';
 import { Notices } from './hud/Notices';
 import { Onboarding } from './hud/Onboarding';
-import { type PermissionAsk, PermissionDialog } from './hud/PermissionDialog';
+import { type Answer, type PermissionAsk, PermissionDialog } from './hud/PermissionDialog';
 import { QuitDialog } from './hud/QuitDialog';
 import { SettingsPanel } from './hud/SettingsPanel';
 import { TextInput } from './hud/TextInput';
@@ -89,6 +89,10 @@ export function App() {
         commandRef.current(e.payload.command, e.payload.arg),
       ),
       listen<PermissionAsk>('markon://permission', (e) => setAsks((a) => [...a, e.payload])),
+      // Answered by voice: the dialog goes away without a click.
+      listen<number>('markon://permission-answered', (e) =>
+        setAsks((a) => a.filter((x) => x.id !== e.payload)),
+      ),
     ];
     return () => {
       for (const s of subs) void s.then((f) => f());
@@ -99,10 +103,10 @@ export function App() {
     if (view.micProblem === 'missing') input.current?.focus();
   }, [view.micProblem]);
 
-  const answer = (allow: boolean) => {
+  const answer = (decision: Answer) => {
     const ask = asks[0];
     if (!ask) return;
-    void call('answer_permission', { id: ask.id, decision: allow ? 'allow' : 'deny' });
+    void call('answer_permission', { id: ask.id, decision });
     setAsks((a) => a.slice(1));
   };
 
@@ -113,7 +117,7 @@ export function App() {
     clearAll,
     history,
     settings,
-    deny: () => answer(false),
+    deny: () => answer('deny'),
     busy: false,
   });
   escState.current = {
@@ -123,7 +127,7 @@ export function App() {
     clearAll,
     history,
     settings,
-    deny: () => answer(false),
+    deny: () => answer('deny'),
     busy: view.state === 'thinking' || view.state === 'speaking',
   };
   useEffect(() => {

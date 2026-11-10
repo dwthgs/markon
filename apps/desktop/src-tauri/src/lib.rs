@@ -126,6 +126,7 @@ async fn capture_window(core: State<'_, CoreState>) -> Result<(), String> {
             name: "screenshot_window".into(),
             input: serde_json::json!({}),
             turn_id: 0,
+            tainted: false,
         })
         .await
         .map(|_| ())
@@ -263,6 +264,7 @@ pub fn run() {
             sources::telegram_sign_in,
             sources::telegram_password,
             sources::telegram_status,
+            sources::forget_approvals,
             report_fps
         ])
         .run(tauri::generate_context!())
