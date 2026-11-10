@@ -54,17 +54,7 @@ impl Kokoro {
     pub fn load(model: &Path, voice: &Path, g2p: G2p) -> Result<Self, AudioError> {
         let styles = read_styles(voice)?;
         // onnxruntime allows one environment per process.
-        static ENV: std::sync::OnceLock<Result<ort::environment::Environment, String>> =
-            std::sync::OnceLock::new();
-        let env = ENV
-            .get_or_init(|| {
-                ort::init()
-                    .with_telemetry(false)
-                    .build()
-                    .map_err(|e| e.to_string())
-            })
-            .as_ref()
-            .map_err(|e| AudioError::Model(e.clone()))?;
+        let env = crate::onnx_env().map_err(AudioError::Model)?;
         let fail = |e: String| AudioError::Model(format!("kokoro: {e}"));
         let session = Session::builder(env)
             .map_err(|e| fail(e.to_string()))?
