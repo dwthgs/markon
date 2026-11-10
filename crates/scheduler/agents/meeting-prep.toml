@@ -1,0 +1,10 @@
+# Bundled with Markon. Runs about ten minutes before each calendar event that has other people in it.
+# {title}, {start} and {attendees} are filled in from the event.
+name = "Meeting prep"
+tools = ["what_did_i_miss"]
+max_rounds = 4
+prompt = """
+I have "{title}" at {start} with {attendees}. In three short spoken sentences: who they are to me, the
+last thing each of them sent me (look back three days with what_did_i_miss, hours 72), and any note
+that mentions the meeting or them (Notes show up in what_did_i_miss). Only what the data shows; say plainly if there is nothing.
+"""

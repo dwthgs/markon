@@ -1,5 +1,9 @@
 //! Scheduler: agents that run on a cron line without a prompt. Schedules live in the
 //! memory database, so they survive restarts; a run missed while asleep happens once on wake.
+//! Agents are files; reminders and meeting prep run from the same loop.
+pub mod files;
+pub mod reminders;
+
 use chrono::{DateTime, Local, TimeZone};
 use croner::Cron;
 use markon_memory::params;
@@ -13,6 +17,8 @@ use std::sync::Arc;
 pub struct AgentSpec {
     pub prompt: String,
     pub tools: Vec<String>,
+    #[serde(default)]
+    pub max_rounds: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -43,19 +49,34 @@ impl Delivery {
     }
 }
 
-pub const MORNING_BRIEFING: &str = "Morning briefing";
+/// Names of the schedules that came from agent files at the last sync.
+const FILE_AGENTS: &str = "scheduler.file_agents";
 
-pub fn morning_briefing() -> AgentSpec {
-    AgentSpec {
-        prompt: "Give me my morning briefing in under a minute of speech: today's calendar and an inbox summary if \
-                 you have tools for them (say plainly if you don't), and today's weather (fetch \
-                 https://wttr.in/?format=3)."
-            .into(),
-        tools: vec!["fetch_page".into()],
-    }
+/// The agents that ship with Markon, written to `~/.markon/agents` once.
+pub const BUNDLED: &[(&str, &str)] = &[
+    ("morning-briefing.toml", include_str!("../agents/morning-briefing.toml")),
+    ("meeting-prep.toml", include_str!("../agents/meeting-prep.toml")),
+];
+
+/// Events that should get a meeting prep card now: starting in 5 to 11 minutes, with other people,
+/// not prepared yet. `(id, start_ms, has_attendees)`.
+pub fn meeting_prep_due(events: &[(String, i64, bool)], now_ms: i64, done: &[String]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|(id, start, people)| {
+            *people && (now_ms + 5 * 60_000..=now_ms + 11 * 60_000).contains(start) && !done.contains(id)
+        })
+        .map(|(id, ..)| id.clone())
+        .collect()
 }
 
-fn next_after(cron: &str, after: DateTime<Local>) -> Result<i64, String> {
+/// Fill `{title}`, `{start}` and `{attendees}` in the meeting prep prompt.
+pub fn fill(template: &str, title: &str, start: &str, attendees: &str) -> String {
+    template.replace("{title}", title).replace("{start}", start).replace("{attendees}", attendees)
+}
+
+
+pub(crate) fn next_after(cron: &str, after: DateTime<Local>) -> Result<i64, String> {
     let c = Cron::from_str(cron).map_err(|e| format!("bad cron line `{cron}`: {e}"))?;
     c.find_next_occurrence(&after, false)
         .map(|t| t.timestamp_millis())
@@ -102,7 +123,7 @@ impl Scheduler {
                         id: r.get(0)?,
                         name: r.get(1)?,
                         cron: r.get(2)?,
-                        agent: serde_json::from_str(&agent).unwrap_or(AgentSpec { prompt: String::new(), tools: vec![] }),
+                        agent: serde_json::from_str(&agent).unwrap_or(AgentSpec { prompt: String::new(), tools: vec![], max_rounds: None }),
                         enabled: r.get(4)?,
                         last_run: r.get(5)?,
                         next_run: r.get(6)?,
@@ -146,6 +167,56 @@ impl Scheduler {
                 .map_err(|e| e.to_string())?;
         }
         Ok(due)
+    }
+
+    /// Make the schedules match the agent files: add new ones, update changed ones, drop ones whose
+    /// file is gone. Rows that never came from a file (none today) are left alone.
+    pub fn sync_files(&self, agents: &[files::AgentFile], now: DateTime<Local>) -> Result<(), String> {
+        let from_files: Vec<String> = self
+            .mem
+            .preference(FILE_AGENTS)
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let existing = self.list()?;
+        let mut names = Vec::new();
+        for f in agents {
+            let Some(cron) = &f.schedule else { continue };
+            names.push(f.name.clone());
+            let spec = serde_json::to_string(&f.spec()).map_err(|e| e.to_string())?;
+            match existing.iter().find(|s| s.name == f.name) {
+                Some(s) if s.cron == *cron && s.agent == f.spec() && s.enabled == f.enabled => {}
+                Some(s) => {
+                    let next = if s.cron == *cron { s.next_run } else { Some(next_after(cron, now)?) };
+                    self.mem
+                        .with(|db| {
+                            db.execute(
+                                "UPDATE schedules SET cron=?2, agent=?3, enabled=?4, next_run=?5 WHERE id=?1",
+                                params![s.id, cron, spec, f.enabled, next],
+                            )
+                        })
+                        .map_err(|e| e.to_string())?;
+                }
+                None => {
+                    let next = next_after(cron, now)?;
+                    self.mem
+                        .with(|db| {
+                            db.execute(
+                                "INSERT INTO schedules(name, cron, agent, enabled, next_run) VALUES (?1,?2,?3,?4,?5)",
+                                params![f.name, cron, spec, f.enabled, next],
+                            )
+                        })
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        for gone in from_files.iter().filter(|n| !names.contains(n)) {
+            self.mem
+                .with(|db| db.execute("DELETE FROM schedules WHERE name=?1", params![gone]))
+                .map_err(|e| e.to_string())?;
+        }
+        self.mem.set_preference(FILE_AGENTS, &serde_json::json!(names)).map_err(|e| e.to_string())
     }
 
     /// Every run is a normal conversation in History.

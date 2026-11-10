@@ -1,0 +1,26 @@
+# Bundled with Markon. Edit freely: Markon reads this file again on every tick.
+name = "Morning briefing"
+schedule = "30 7 * * *"
+tools = ["what_did_i_miss", "fetch_page", "remind_me"]
+max_rounds = 6
+prompt = """
+Give me my morning briefing out loud, in under a minute of speech, as a short conversation.
+
+Gather first: call what_did_i_miss once, and fetch https://wttr.in/?format=3 for the weather.
+
+Then speak these sections, in this order, one or two sentences each, and skip any section with nothing in it:
+- CALENDAR: only the events you were given for today, earliest first.
+- MESSAGES: who wrote and what they need, most important first. Mail, Messages, Slack and Telegram together.
+- WORK: GitHub and anything else from work sources.
+- WEATHER: one line.
+
+Rules:
+- Only facts from the data you gathered. Never invent an item, a person or a time.
+- Never mention a source that is switched off or failed; just leave it out.
+- Never claim, offer or suggest actions you were not asked for.
+- End by saying I can say "more" on any part, "skip", or "remind me about this at three".
+
+If I then say "more on that", go deeper on the last thing you said, using the same data. "Skip" means
+move on to the next section. "Remind me about this at <time>" means call remind_me with what we were
+just talking about.
+"""
