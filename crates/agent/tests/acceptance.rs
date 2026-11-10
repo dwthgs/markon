@@ -623,3 +623,18 @@ async fn old_turns_are_summarised_and_recent_ones_kept() {
     );
     assert_eq!(a.history().len(), 2 + 8 + 2);
 }
+
+#[tokio::test]
+async fn a_turn_reports_where_its_time_went() {
+    let (a, _, mut rx) = agent(vec![
+        FakeProvider::tools(&[("1", "slow", json!({}))]),
+        FakeProvider::text("done"),
+    ]);
+    a.submit(UserTurn::text("go")).await;
+    let ev = drain(&mut rx).await;
+    let t = &finished(&ev).timings;
+    assert_eq!(t.tools.len(), 1);
+    assert_eq!(t.tools[0].0, "slow");
+    assert!(t.tools[0].1 >= 80 && t.tools[0].2, "{t:?}");
+    assert!(t.first_text_ms.is_some_and(|f| f >= 80 && f <= t.total_ms));
+}

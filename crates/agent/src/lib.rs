@@ -132,6 +132,17 @@ pub struct TurnSummary {
     pub usage: (u64, u64),
     pub provider: String,
     pub model: String,
+    /// Where the turn's time went.
+    pub timings: Timings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Timings {
+    /// From the start of the turn to the model's first word.
+    pub first_text_ms: Option<u64>,
+    pub total_ms: u64,
+    /// Each tool call: name, milliseconds, whether it worked.
+    pub tools: Vec<(String, u64, bool)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -258,6 +269,8 @@ pub struct Agent {
     next_turn: AtomicU64,
     /// Outside content is in the history. Cleared only with the history.
     tainted: std::sync::atomic::AtomicBool,
+    /// The running turn's start, first word and tool times.
+    timing: Mutex<(Option<Instant>, Timings)>,
 }
 
 enum RoundEnd {
@@ -290,6 +303,7 @@ impl Agent {
             cancel: watch::channel(0).0,
             next_turn: AtomicU64::new(1),
             tainted: std::sync::atomic::AtomicBool::new(false),
+            timing: Mutex::new((None, Timings::default())),
         };
         (agent, rx)
     }
@@ -438,6 +452,7 @@ impl Agent {
         cancelled.mark_unchanged();
         self.set_state(AgentState::Thinking);
         let started = Instant::now();
+        *self.timing.lock().expect("timing") = (Some(started), Timings::default());
         let mut cfg = self.cfg.read().expect("cfg lock").clone();
         if let Some(n) = turn.max_rounds {
             cfg.max_rounds = n.min(cfg.max_rounds);
@@ -589,6 +604,11 @@ impl Agent {
             usage,
             provider: provider.route().into(),
             model: current_model(),
+            timings: {
+                let mut t = std::mem::take(&mut self.timing.lock().expect("timing").1);
+                t.total_ms = started.elapsed().as_millis() as u64;
+                t
+            },
         }));
     }
 
@@ -702,6 +722,14 @@ impl Agent {
                         t.insert(0, ' ');
                     }
                     text.push_str(&t);
+                    {
+                        let mut tm = self.timing.lock().expect("timing");
+                        if tm.1.first_text_ms.is_none()
+                            && let Some(s) = tm.0
+                        {
+                            tm.1.first_text_ms = Some(s.elapsed().as_millis() as u64);
+                        }
+                    }
                     self.emit(AgentEvent::TextDelta { turn_id, text: t });
                 }
                 Some(Ok(ChatDelta::Block(b))) => blocks.push(b),
@@ -805,10 +833,10 @@ impl Agent {
                     );
                     Box::pin(async move { Err(msg) })
                 };
-            handles.push((c, tokio::spawn(fut)));
+            handles.push((c, Instant::now(), tokio::spawn(fut)));
         }
         let mut out = Vec::new();
-        for (c, mut h) in handles {
+        for (c, t0, mut h) in handles {
             let r = match tokio::time::timeout_at(deadline, &mut h).await {
                 Ok(r) => r.unwrap_or_else(|e| Err(format!("tool crashed: {e}"))),
                 Err(_) => {
@@ -824,6 +852,13 @@ impl Agent {
                 Ok(s) => (true, scrub::scrub(&s)),
                 Err(s) => (false, scrub::scrub(&s)),
             };
+            // shortcut: calls run in parallel and are collected in order, so a fast call behind a slow one
+            // reads as the slow one's time; fine for "where did the time go", not for profiling.
+            self.timing.lock().expect("timing").1.tools.push((
+                c.name.clone(),
+                t0.elapsed().as_millis() as u64,
+                ok,
+            ));
             self.emit(AgentEvent::ToolCallFinished {
                 turn_id: c.turn_id,
                 id: c.id.clone(),
