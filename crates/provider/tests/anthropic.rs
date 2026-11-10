@@ -183,3 +183,37 @@ async fn no_key_fails_before_any_request() {
         vec![Err(ProviderError::NoKey)]
     );
 }
+
+#[tokio::test]
+async fn the_direct_route_offers_web_search_and_keeps_its_blocks() {
+    let (url, seen) = mock(vec![sse(&[
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srv1","name":"web_search","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"cats\"}"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srv1","content":[{"type":"web_search_result","url":"https://example.com","title":"Cats"}]}}"#,
+        r#"{"type":"content_block_stop","index":1}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":3}}"#,
+        r#"{"type":"message_stop"}"#,
+    ])])
+    .await;
+    let p = AnthropicDirect::with_base_url(&url, key());
+    let out = collect(p.stream(req())).await;
+    let raw = seen.lock().unwrap()[0].clone();
+    assert!(raw.contains(r#""type":"web_search_20260209""#), "{raw}");
+    assert!(raw.contains(r#""type":"web_fetch_20260209""#));
+    let blocks: Vec<_> = out
+        .iter()
+        .filter_map(|d| match d {
+            Ok(ChatDelta::Block(b)) => Some(b.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(blocks[0]["input"]["query"], "cats", "server tool input is kept");
+    assert_eq!(blocks[1]["type"], "web_search_tool_result");
+    assert!(
+        !out.iter().any(|d| matches!(d, Ok(ChatDelta::ToolCall { .. }))),
+        "server tools are not run locally"
+    );
+    assert!(out.contains(&Ok(ChatDelta::Stop(StopReason::Paused))));
+}

@@ -180,6 +180,8 @@ pub struct Agent {
 enum RoundEnd {
     Done { partial: bool },
     Tools(Vec<ToolCall>),
+    /// A server-side tool loop paused; send the same messages again to resume.
+    Paused,
     Cancelled,
     Failed(ProviderError),
 }
@@ -329,6 +331,13 @@ impl Agent {
                     partial = p;
                     break;
                 }
+                RoundEnd::Paused => {
+                    rounds += 1;
+                    if rounds > cfg.max_rounds || started.elapsed() >= cfg.turn_limit {
+                        partial = true;
+                        break;
+                    }
+                }
                 RoundEnd::Tools(calls) => {
                     let over = rounds >= cfg.max_rounds || started.elapsed() >= cfg.turn_limit;
                     if over {
@@ -368,7 +377,9 @@ impl Agent {
                         {
                             RoundEnd::Cancelled => return self.cancelled(turn_id),
                             RoundEnd::Done { partial: p } => partial = p,
-                            RoundEnd::Failed(_) | RoundEnd::Tools(_) => partial = true,
+                            RoundEnd::Failed(_) | RoundEnd::Tools(_) | RoundEnd::Paused => {
+                                partial = true
+                            }
                         }
                         break;
                     }
@@ -534,6 +545,9 @@ impl Agent {
         }
         if stop == StopReason::ToolUse && !calls.is_empty() {
             return RoundEnd::Tools(calls);
+        }
+        if stop == StopReason::Paused {
+            return RoundEnd::Paused;
         }
         if stop == StopReason::Refusal && text.is_empty() {
             text.push_str("I can't help with that one.");

@@ -21,6 +21,8 @@ pub struct MessagesClient {
     pub(crate) base_url: String,
     pub(crate) auth: Auth,
     pub(crate) fallbacks: bool,
+    /// Anthropic's own web search and fetch, run on their side (direct route only).
+    pub(crate) web: bool,
 }
 
 impl MessagesClient {
@@ -34,6 +36,7 @@ impl MessagesClient {
             base_url: base_url.into(),
             auth,
             fallbacks,
+            web: false,
         }
     }
 
@@ -56,8 +59,18 @@ impl MessagesClient {
             "messages": req.messages,
             "stream": true,
         });
-        if !req.tools.is_empty() {
-            b["tools"] = json!(req.tools);
+        let mut tools = json!(req.tools);
+        if self.web {
+            for t in ["web_search_20260209", "web_fetch_20260209"] {
+                let name = t.trim_end_matches("_20260209");
+                tools
+                    .as_array_mut()
+                    .expect("array")
+                    .push(json!({"type": t, "name": name, "max_uses": 5}));
+            }
+        }
+        if tools.as_array().is_some_and(|t| !t.is_empty()) {
+            b["tools"] = tools;
         }
         if self.fallbacks {
             b["fallbacks"] = json!("default");
@@ -198,6 +211,13 @@ async fn run_stream(
                                 b.value["signature"] = json!(b.signature);
                             }
                         }
+                        // Run by Anthropic; its result arrives as the next block. Kept for the history.
+                        "server_tool_use" => {
+                            if !b.json.trim().is_empty() {
+                                b.value["input"] =
+                                    serde_json::from_str(&b.json).unwrap_or(Value::Null);
+                            }
+                        }
                         "tool_use" => {
                             let input: Value = if b.json.trim().is_empty() {
                                 json!({})
@@ -268,7 +288,10 @@ impl AnthropicDirect {
     }
     pub fn with_base_url(base_url: &str, key: KeySource) -> Self {
         Self {
-            client: MessagesClient::new(base_url, Auth::ApiKey(key), true),
+            client: MessagesClient {
+                web: true,
+                ..MessagesClient::new(base_url, Auth::ApiKey(key), true)
+            },
         }
     }
 }

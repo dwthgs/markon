@@ -76,6 +76,8 @@ pub enum StopReason {
     EndTurn,
     ToolUse,
     MaxTokens,
+    /// A server-side tool loop (web search) hit its limit: send the turn again to resume.
+    Paused,
     Refusal,
     Other(String),
 }
@@ -85,6 +87,7 @@ impl StopReason {
         match s {
             "end_turn" | "stop" => Self::EndTurn,
             "tool_use" | "tool_calls" => Self::ToolUse,
+            "pause_turn" => Self::Paused,
             "max_tokens" | "length" => Self::MaxTokens,
             "refusal" | "content_filter" => Self::Refusal,
             o => Self::Other(o.into()),

@@ -308,6 +308,20 @@ async fn cancelling_after_the_user_interrupted_keeps_listening() {
 }
 
 #[tokio::test]
+async fn a_paused_server_search_is_resumed_without_a_new_user_message() {
+    let mut paused = FakeProvider::text("Looking.");
+    paused.pop();
+    paused.push(Ok(ChatDelta::Stop(StopReason::Paused)));
+    let (a, fake, mut rx) = agent(vec![paused, FakeProvider::text("Found it.")]);
+    a.submit(UserTurn::text("search")).await;
+    let ev = drain(&mut rx).await;
+    assert_eq!(finished(&ev).text, "Looking. Found it.");
+    let second = &fake.requests.lock().unwrap()[1];
+    let last = second.messages.last().unwrap();
+    assert_eq!(last.role, Role::Assistant, "resumes from the paused assistant turn");
+}
+
+#[tokio::test]
 async fn prompt_sections_compose_the_system_prompt() {
     let (mut a, fake, _rx) = agent(vec![FakeProvider::text("ok")]);
     a.add_section(Arc::new(StaticSection("You are Markon.".into())));
