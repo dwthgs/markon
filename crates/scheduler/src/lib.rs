@@ -2,6 +2,7 @@
 //! memory database, so they survive restarts; a run missed while asleep happens once on wake.
 //! Agents are files; reminders and meeting prep run from the same loop.
 pub mod files;
+pub mod proposals;
 pub mod reminders;
 
 use chrono::{DateTime, Local, TimeZone};

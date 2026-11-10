@@ -259,3 +259,53 @@ async fn a_file_agent_runs_and_cannot_call_a_tool_off_its_list() {
         "run_command never reached the runtime"
     );
 }
+
+/// A proposal sits beside the original until the user approves it.
+#[tokio::test]
+async fn an_improvement_is_proposed_beside_the_original_and_applied_only_on_yes() {
+    use markon_provider::fake::FakeProvider;
+    use markon_scheduler::proposals;
+    let dir = tmp("proposals");
+    let file = dir.join("standup.toml");
+    std::fs::write(&file, STANDUP).unwrap();
+    let better = STANDUP.replace(
+        "in two sentences",
+        "in two sentences, naming each repository",
+    );
+    let fake = FakeProvider::new(vec![FakeProvider::text(&better)]);
+    let diff = proposals::propose(&fake, "m", &file, "the user asked which repository twice")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(diff.contains("+ prompt = \"Summarise yesterday's GitHub activity in two sentences, naming each repository.\""), "{diff}");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        STANDUP,
+        "nothing changes before a yes"
+    );
+    assert_eq!(proposals::list(std::slice::from_ref(&dir)).len(), 1);
+    proposals::approve(&file).unwrap();
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("naming each repository")
+    );
+    assert!(
+        dir.join("standup.toml.before").exists(),
+        "the original is kept"
+    );
+    assert!(proposals::list(std::slice::from_ref(&dir)).is_empty());
+
+    let broken = FakeProvider::new(vec![FakeProvider::text("name = \"x\"\nnot toml at all [")]);
+    assert!(
+        proposals::propose(&broken, "m", &file, "").await.is_err(),
+        "a broken agent file is never proposed"
+    );
+    let same = FakeProvider::new(vec![FakeProvider::text(
+        &std::fs::read_to_string(&file).unwrap(),
+    )]);
+    assert_eq!(
+        proposals::propose(&same, "m", &file, "").await.unwrap(),
+        None
+    );
+}
