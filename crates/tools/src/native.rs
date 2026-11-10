@@ -19,7 +19,7 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         t(
             "read_file",
-            "Read a text file in a folder the user approved.",
+            "Read a text file or a PDF in a folder the user approved.",
             path,
             &["path"],
         ),
@@ -100,6 +100,38 @@ pub fn specs() -> Vec<ToolSpec> {
             &["url"],
         ),
     ]
+}
+
+pub const MAX_PDF: u64 = 30 * 1024 * 1024;
+
+pub fn is_pdf(p: &std::path::Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+}
+
+/// The text of a PDF, with `pdf-extract`. Scanned pages without a text layer give
+/// nothing, and the caller is told so.
+pub fn pdf_text(p: &std::path::Path) -> Result<String, String> {
+    let len = std::fs::metadata(p).map_err(|e| e.to_string())?.len();
+    if len > MAX_PDF {
+        return Err(format!("{} is larger than 30 MB", p.display()));
+    }
+    let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+    // A malformed PDF can make the parser panic; that is one failed read, not a crash.
+    let text = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes))
+        .map_err(|_| format!("{} could not be read as a PDF", p.display()))?
+        .map_err(|e| format!("{} could not be read as a PDF: {e}", p.display()))?;
+    let text = text
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return Err(format!(
+            "{} has no text layer (a scan?), so there is nothing to read",
+            p.display()
+        ));
+    }
+    Ok(text)
 }
 
 /// Readable text from HTML: drops scripts, styles and tags, decodes common entities.

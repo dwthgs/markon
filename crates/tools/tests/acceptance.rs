@@ -436,3 +436,61 @@ async fn every_spotify_call_updates_the_same_card() {
         "one card, updated in place"
     );
 }
+
+/// A one-page PDF with `text` in Helvetica, built by hand with a correct cross-reference table.
+fn pdf(text: &str) -> Vec<u8> {
+    let stream = format!("BT /F1 18 Tf 72 720 Td ({text}) Tj ET");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+#[tokio::test]
+async fn a_pdf_in_an_approved_folder_is_read_as_text() {
+    let s = setup("pdf", vec![]);
+    std::fs::write(
+        s.dir.join("minutes.pdf"),
+        pdf("Budget meeting moved to Thursday"),
+    )
+    .unwrap();
+    let out =
+        s.rt.call(call(
+            "read_file",
+            json!({"path": s.dir.join("minutes.pdf")}),
+        ))
+        .await
+        .unwrap();
+    assert!(out.contains("Budget meeting moved to Thursday"), "{out}");
+    std::fs::write(s.dir.join("broken.pdf"), b"%PDF-1.4 not really").unwrap();
+    let err =
+        s.rt.call(call("read_file", json!({"path": s.dir.join("broken.pdf")})))
+            .await
+            .unwrap_err();
+    assert!(
+        err.contains("could not be read as a PDF") || err.contains("no text layer"),
+        "{err}"
+    );
+}

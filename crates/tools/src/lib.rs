@@ -191,6 +191,13 @@ impl Runtime {
                     )));
                 }
                 let meta = std::fs::metadata(&p).map_err(|e| failed(e.to_string()))?;
+                if native::is_pdf(&p) {
+                    let text = native::pdf_text(&p).map_err(failed)?;
+                    return Ok(Outcome {
+                        card: json!({"path": p, "size": meta.len(), "preview": text}),
+                        model: text,
+                    });
+                }
                 if meta.len() > MAX_FILE {
                     return Err(failed(format!("{} is larger than 2 MB", p.display())));
                 }

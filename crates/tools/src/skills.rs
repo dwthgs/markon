@@ -435,4 +435,7 @@ impl<T: markon_agent::ToolRuntime> markon_agent::ToolRuntime for WithSkills<T> {
 }
 
 /// Skills that ship with Markon.
-pub const BUNDLED: &[&str] = &[include_str!("../skills/markon-setup/SKILL.md")];
+pub const BUNDLED: &[&str] = &[
+    include_str!("../skills/markon-setup/SKILL.md"),
+    include_str!("../skills/deep-research/SKILL.md"),
+];

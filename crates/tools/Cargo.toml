@@ -17,6 +17,7 @@ reqwest.workspace = true
 url = "=2.5.8"
 serde.workspace = true
 sha2 = "=0.10.9"
+pdf-extract = "=0.12.1"
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
