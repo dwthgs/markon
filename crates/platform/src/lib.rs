@@ -43,6 +43,15 @@ pub trait Platform: Send + Sync {
     fn has_full_disk_access(&self) -> bool;
     /// True while the user is likely in a call or sharing the screen (scheduled agents stay quiet).
     fn in_call_or_sharing(&self) -> bool;
+    /// Send an iMessage (or SMS through the iPhone) with Messages. The caller has asked the user.
+    fn send_imessage(&self, to: &str, text: &str) -> Result<(), PlatformError>;
+    /// Add an event to Calendar. `start` is local "YYYY-MM-DD HH:MM". The caller has asked the user.
+    fn add_calendar_event(
+        &self,
+        title: &str,
+        start: &str,
+        minutes: u32,
+    ) -> Result<(), PlatformError>;
     /// Control the Spotify app and report what it is playing.
     fn spotify(&self, cmd: SpotifyCommand<'_>) -> Result<NowPlaying, PlatformError>;
 }
@@ -156,10 +165,76 @@ pub fn contacts_dbs(home: &std::path::Path) -> Vec<PathBuf> {
     let root = home.join("Library/Application Support/AddressBook");
     let mut v = vec![root.join("AddressBook-v22.abcddb")];
     if let Ok(rd) = std::fs::read_dir(root.join("Sources")) {
-        v.extend(rd.flatten().map(|e| e.path().join("AddressBook-v22.abcddb")));
+        v.extend(
+            rd.flatten()
+                .map(|e| e.path().join("AddressBook-v22.abcddb")),
+        );
     }
     v.retain(|p| p.exists());
     v
+}
+
+/// Messages and Calendar scripts take their values as arguments (`argv`), never pasted into the
+/// script text, so a message cannot inject AppleScript.
+pub const SEND_IMESSAGE: &str = "on run argv\n\
+    set target to item 1 of argv\n\
+    set body to item 2 of argv\n\
+    tell application \"Messages\"\n\
+    set svc to 1st account whose service type = iMessage\n\
+    send body to participant target of svc\n\
+    end tell\n\
+    end run";
+
+pub const ADD_EVENT: &str = "on run argv\n\
+    set t to item 1 of argv\n\
+    set y to (item 2 of argv) as integer\n\
+    set mo to (item 3 of argv) as integer\n\
+    set d to (item 4 of argv) as integer\n\
+    set h to (item 5 of argv) as integer\n\
+    set mi to (item 6 of argv) as integer\n\
+    set len to (item 7 of argv) as integer\n\
+    set s to current date\n\
+    set day of s to 1\n\
+    set year of s to y\n\
+    set month of s to mo\n\
+    set day of s to d\n\
+    set hours of s to h\n\
+    set minutes of s to mi\n\
+    set seconds of s to 0\n\
+    tell application \"Calendar\"\n\
+    tell first calendar whose writable is true\n\
+    make new event with properties {summary:t, start date:s, end date:s + len * minutes}\n\
+    end tell\n\
+    end tell\n\
+    end run";
+
+/// "2026-11-11 09:30" as (year, month, day, hour, minute).
+pub fn split_local(start: &str) -> Option<(i32, u32, u32, u32, u32)> {
+    let (date, time) = start.trim().split_once([' ', 'T'])?;
+    let mut d = date.split('-').map(|x| x.parse::<u32>().ok());
+    let mut t = time.split(':').map(|x| x.parse::<u32>().ok());
+    let (y, mo, day) = (d.next()??, d.next()??, d.next()??);
+    let (h, mi) = (t.next()??, t.next()??);
+    ((1..=12).contains(&mo) && (1..=31).contains(&day) && h < 24 && mi < 60)
+        .then_some((y as i32, mo, day, h, mi))
+}
+
+fn osascript(script: &str, args: &[&str], what: &str) -> Result<(), PlatformError> {
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(script)
+        .args(args)
+        .output()
+        .map_err(|e| PlatformError::Open(e.to_string()))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    Err(PlatformError::Open(if err.contains("-1743") {
+        format!("Markon is not allowed to control {what} (System Settings > Privacy > Automation)")
+    } else {
+        format!("{what} did not do it: {}", err.trim())
+    }))
 }
 
 pub fn current() -> impl Platform {
@@ -268,6 +343,39 @@ impl Platform for MacOs {
         run_open(&["x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"])
     }
 
+    fn send_imessage(&self, to: &str, text: &str) -> Result<(), PlatformError> {
+        if to.trim().is_empty() || to.starts_with('-') || text.trim().is_empty() {
+            return Err(PlatformError::Refused(
+                "a message needs a recipient and text".into(),
+            ));
+        }
+        osascript(SEND_IMESSAGE, &[to.trim(), text], "Messages")
+    }
+
+    fn add_calendar_event(
+        &self,
+        title: &str,
+        start: &str,
+        minutes: u32,
+    ) -> Result<(), PlatformError> {
+        let (y, mo, d, h, mi) = split_local(start)
+            .ok_or_else(|| PlatformError::Refused(format!("{start} is not YYYY-MM-DD HH:MM")))?;
+        let n = |v: u32| v.to_string();
+        osascript(
+            ADD_EVENT,
+            &[
+                title,
+                &y.to_string(),
+                &n(mo),
+                &n(d),
+                &n(h),
+                &n(mi),
+                &n(minutes.clamp(5, 24 * 60)),
+            ],
+            "Calendar",
+        )
+    }
+
     fn open_full_disk_access_settings(&self) -> Result<(), PlatformError> {
         run_open(&["x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
     }
@@ -374,9 +482,23 @@ mod tests {
     }
 
     #[test]
+    fn scripts_take_values_as_arguments_only() {
+        for s in [SEND_IMESSAGE, ADD_EVENT] {
+            assert!(s.starts_with("on run argv") && s.contains("item 1 of argv"));
+        }
+        assert_eq!(split_local("2026-11-11 09:30"), Some((2026, 11, 11, 9, 30)));
+        assert_eq!(split_local("2026-11-11T09:30"), Some((2026, 11, 11, 9, 30)));
+        assert_eq!(split_local("tomorrow"), None);
+        assert_eq!(split_local("2026-13-01 09:00"), None);
+    }
+
+    #[test]
     fn mac_databases_live_under_the_users_library() {
         let h = std::path::Path::new("/Users/x");
-        assert_eq!(mac_db(h, MacDb::Messages), std::path::Path::new("/Users/x/Library/Messages/chat.db"));
+        assert_eq!(
+            mac_db(h, MacDb::Messages),
+            std::path::Path::new("/Users/x/Library/Messages/chat.db")
+        );
         assert!(mac_db(h, MacDb::Notes).ends_with("group.com.apple.notes/NoteStore.sqlite"));
         assert!(contacts_dbs(std::path::Path::new("/nonexistent")).is_empty());
     }
