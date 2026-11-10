@@ -1,0 +1,37 @@
+[package]
+name = "markon-sources"
+description = "What happened in the user's accounts, in one shape: Mac databases, mail, GitHub, MCP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+markon-agent = { path = "../agent" }
+markon-memory = { path = "../memory" }
+markon-provider = { path = "../provider" }
+markon-tools = { path = "../tools" }
+async-imap = { version = "=0.12.0", default-features = false, features = ["runtime-tokio"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+flate2 = "=1.1.11"
+futures-util = "=0.3.34"
+grammers-client = { version = "=0.12.0", default-features = false }
+grammers-session = { version = "=0.12.0", default-features = false, features = ["serde"] }
+mail-parser = "=1.0.1"
+reqwest.workspace = true
+rusqlite.workspace = true
+rustls = "=0.23.46"
+rustls-platform-verifier = "=0.7.1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls = "=0.26.6"
+
+[dev-dependencies]
+schemars = "1"
+rmcp = { workspace = true, features = ["client", "server", "macros", "schemars", "transport-async-rw"] }
+
+[lints]
+workspace = true
