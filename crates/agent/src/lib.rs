@@ -1,5 +1,7 @@
 //! The agent loop: build the prompt from sections, stream the model, run tool calls in
 //! parallel, and keep the Idle → Listening → Thinking → Speaking → Idle state machine honest.
+pub mod scrub;
+
 use markon_provider::*;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -626,8 +628,8 @@ impl Agent {
                 }
             };
             let (ok, full) = match r {
-                Ok(s) => (true, s),
-                Err(s) => (false, s),
+                Ok(s) => (true, scrub::scrub(&s)),
+                Err(s) => (false, scrub::scrub(&s)),
             };
             self.emit(AgentEvent::ToolCallFinished {
                 turn_id: c.turn_id,
