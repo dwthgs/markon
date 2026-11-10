@@ -107,7 +107,29 @@ fn local(core: &crate::core::Core, s: &Settings) -> Value {
         "model": crate::core::local_model(s),
         "builtin_ready": builtin.is_some_and(|e| core.dir.join("models").join(&e.path).exists()),
         "builtin_mb": builtin.map(|e| e.size / 1_000_000).unwrap_or(0),
+        "chunks": core.memory.chunk_count().unwrap_or(0),
+        "meaning_search": core.embed.read().map(|e| e.is_some()).unwrap_or(false),
     })
+}
+
+/// Download the meaning-search model (23 MB) and its vocabulary, pinned by SHA-256, then load it.
+#[tauri::command]
+pub async fn download_embedder(core: State<'_, CoreState>) -> Result<(), String> {
+    let m = markon_audio::manifest::Manifest::bundled();
+    let dir = core.dir.join("models");
+    for id in [markon_llm::embed::MODEL_ID, markon_llm::embed::VOCAB_ID] {
+        let e = m.entry(id).map_err(|e| e.to_string())?.clone();
+        if e.verify(&dir).is_err() {
+            e.download(&dir, |_, _| {})
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    let c = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || c.load_embedder())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Download the built-in model, checked against its pinned SHA-256. Progress shows in
@@ -191,6 +213,10 @@ pub fn settings_set(
             .filter(|p| p.is_absolute() && p.is_dir())
             .collect();
         core.tools.perms.set_approved(f.clone());
+        // A folder taken off the list is taken out of the index too.
+        for gone in s.approved_folders.iter().filter(|g| !f.contains(g)) {
+            let _ = core.memory.unindex_where(&gone.to_string_lossy());
+        }
         s.approved_folders = f;
     }
     if let Some(o) = patch.onboarded {

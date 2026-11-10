@@ -157,3 +157,10 @@ test('a source can be kept on this Mac', async ({ page }) => {
   expect(patch.patch.sources.private).toEqual(['imessage']);
   await expect(panel.getByRole('button', { name: 'Download the built-in model' })).toBeHidden();
 });
+
+test('the folders section says how much is indexed and offers meaning search', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await expect(panel).toContainText('342 passages indexed');
+  await panel.getByRole('button', { name: 'Add meaning search (23 MB)' }).click();
+  expect(await calls(page, 'download_embedder')).toHaveLength(1);
+});

@@ -256,6 +256,7 @@ pub fn run() {
             setup::wipe_all,
             setup::approve_skill,
             setup::download_builtin_model,
+            setup::download_embedder,
             sources::open_full_disk_access,
             sources::set_source_secret,
             sources::delete_source_secret,

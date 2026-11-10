@@ -33,6 +33,8 @@ export const settingsView = {
     model: 'qwen3.5:27b',
     builtin_ready: false,
     builtin_mb: 1117,
+    chunks: 342,
+    meaning_search: false,
   },
   keys: { anthropic: false, openrouter: false },
   models: [

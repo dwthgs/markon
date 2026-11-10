@@ -46,6 +46,7 @@ pub struct Core {
     pub reminders: Arc<markon_scheduler::reminders::Reminders>,
     pub accounts: Arc<std::sync::RwLock<markon_sources::act::Accounts>>,
     pub private: Arc<std::sync::RwLock<markon_sources::tool::Private>>,
+    pub embed: markon_sources::search::SharedEmbedder,
     pub skills: markon_tools::skills::Library,
     /// The conversation turns and cards are written to (one per session or scheduled run).
     conv: Arc<Mutex<Option<i64>>>,
@@ -380,29 +381,35 @@ impl Core {
             &settings,
             &dir.join("models"),
         )));
+        let embed: markon_sources::search::SharedEmbedder = Default::default();
         let (mut agent, mut rx) = Agent::new(
             provider,
             Arc::new(crate::remember::WithMemory {
-                inner: markon_sources::act::WithActions {
-                    inner: markon_sources::tool::WithSources {
-                        inner: markon_tools::skills::WithSkills {
-                            inner: markon_scheduler::reminders::WithReminders {
-                                inner: workspace::shared(&tools),
-                                reminders: reminders.clone(),
+                inner: markon_sources::search::WithSearch {
+                    inner: markon_sources::act::WithActions {
+                        inner: markon_sources::tool::WithSources {
+                            inner: markon_tools::skills::WithSkills {
+                                inner: markon_scheduler::reminders::WithReminders {
+                                    inner: workspace::shared(&tools),
+                                    reminders: reminders.clone(),
+                                },
+                                library: skills.clone(),
+                                perms: tools.perms.clone(),
                             },
-                            library: skills.clone(),
-                            perms: tools.perms.clone(),
+                            sources: sources.clone(),
+                            cards: card_sink.clone(),
+                            memory: memory.clone(),
+                            private: private.clone(),
+                            embed: embed.clone(),
                         },
-                        sources: sources.clone(),
+                        accounts: accounts.clone(),
+                        outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
+                        perms: tools.perms.clone(),
                         cards: card_sink.clone(),
                         memory: memory.clone(),
-                        private: private.clone(),
                     },
-                    accounts: accounts.clone(),
-                    outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
-                    perms: tools.perms.clone(),
-                    cards: card_sink.clone(),
                     memory: memory.clone(),
+                    embed: embed.clone(),
                 },
                 pending: pending_facts.clone(),
             }),
@@ -440,6 +447,7 @@ impl Core {
             reminders,
             accounts,
             private,
+            embed,
             skills,
             conv,
             turn_card_ids,
@@ -473,6 +481,11 @@ impl Core {
         tauri::async_runtime::spawn(async move {
             crate::sources::start_telegram(&c);
         });
+        let c = core.clone();
+        std::thread::Builder::new()
+            .name("markon-embed".into())
+            .spawn(move || c.load_embedder())
+            .expect("embed thread");
         core
     }
 
@@ -1068,8 +1081,55 @@ impl Core {
                 self.watch().await;
                 self.meeting_prep(&files).await;
             }
+            if tick.is_multiple_of(20) {
+                let c = self.clone();
+                let _ = tokio::task::spawn_blocking(move || c.index_pass()).await;
+            }
             tick += 1;
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    }
+
+    /// Load the meaning-search model if its pinned files are here. Without it, search is
+    /// keyword only.
+    pub fn load_embedder(&self) {
+        let m = Manifest::bundled();
+        let dir = self.dir.join("models");
+        let path = |id: &str| m.entry(id).ok().and_then(|e| e.verify(&dir).ok());
+        let (Some(model), Some(vocab)) = (
+            path(markon_llm::embed::MODEL_ID),
+            path(markon_llm::embed::VOCAB_ID),
+        ) else {
+            return;
+        };
+        match markon_llm::embed::Embedder::load(&model, &vocab) {
+            Ok(e) => {
+                let e = Arc::new(e);
+                *self.embed.write().expect("embed") =
+                    Some(Arc::new(move |t: &str| e.embed(t).ok()));
+            }
+            Err(e) => eprintln!("[index] meaning search is off: {e}"),
+        }
+    }
+
+    /// Every ten minutes: index the approved folders (changed files only) and learn people from Contacts.
+    fn index_pass(&self) {
+        let (folders, imessage) = {
+            let s = self.settings.lock().expect("settings");
+            (s.approved_folders.clone(), s.sources.imessage)
+        };
+        let mut n = 0;
+        for f in &folders {
+            n += markon_sources::search::index_folder(&self.memory, f, &self.embed);
+        }
+        if imessage {
+            let contacts = markon_sources::mac::all_contacts(&markon_platform::contacts_dbs(
+                &markon_platform::home(),
+            ));
+            markon_sources::search::link_contacts(&self.memory, &contacts);
+        }
+        if n > 0 {
+            let _ = self.memory.touch_index();
         }
     }
 

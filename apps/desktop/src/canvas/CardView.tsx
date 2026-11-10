@@ -111,7 +111,20 @@ function Body({ card }: { card: Card }) {
       return <MediaBody card={card} />;
     case 'result':
     case 'note':
-      return <p className="whitespace-pre-wrap">{b.text ?? b.preview ?? ''}</p>;
+      return (
+        <>
+          <p className="whitespace-pre-wrap">{b.text ?? b.preview ?? ''}</p>
+          {Array.isArray(b.sources) && b.sources.length ? (
+            <ol className="mt-2 list-decimal pl-4 text-[10px] text-white/55" aria-label="Sources">
+              {b.sources.map((s: string) => (
+                <li key={s} className="break-all">
+                  {s}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </>
+      );
     case 'page':
       return (
         <>

@@ -20,7 +20,15 @@ export interface SettingsView {
     local_url: string;
     local_model: string | null;
   };
-  local: { ram_gb: number; fit: string[]; model: string; builtin_ready: boolean; builtin_mb: number };
+  local: {
+    ram_gb: number;
+    fit: string[];
+    model: string;
+    builtin_ready: boolean;
+    builtin_mb: number;
+    chunks: number;
+    meaning_search: boolean;
+  };
   keys: { anthropic: boolean; openrouter: boolean };
   models: { id: string; name: string }[];
   default_model: string;

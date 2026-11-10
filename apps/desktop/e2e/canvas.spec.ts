@@ -269,3 +269,22 @@ test('a send shows the exact text, offers always-yes only when allowed, and clos
   await emit(page, 'markon://permission-answered', 22);
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
 });
+
+test('a research result lists its sources under the answer', async ({ page }) => {
+  await open(page);
+  await emit(
+    page,
+    'markon://card',
+    card('r1', 'result', 'Lalibela trip', {
+      body: {
+        text: 'Flights are on the 14th [1].',
+        sources: ['https://example.com/flights', 'your documents: "trip"'],
+      },
+    }),
+  );
+  const sources = page
+    .getByRole('article', { name: 'Result: Lalibela trip' })
+    .getByRole('list', { name: 'Sources' });
+  await expect(sources.getByRole('listitem')).toHaveCount(2);
+  await expect(sources).toContainText('https://example.com/flights');
+});

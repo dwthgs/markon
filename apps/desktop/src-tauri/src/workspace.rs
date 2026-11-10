@@ -153,7 +153,12 @@ impl TurnCards {
     pub fn on_agent(&self, e: &AgentEvent, user_text: &str) {
         let mut cards = self.agent.lock().expect("cards");
         match e {
-            AgentEvent::ToolCallStarted { turn_id, name, .. } => {
+            AgentEvent::ToolCallStarted {
+                turn_id,
+                name,
+                input,
+                ..
+            } => {
                 let c = cards.entry(*turn_id).or_insert_with(|| {
                     let mut title: String = user_text.chars().take(60).collect();
                     if title.is_empty() {
@@ -166,6 +171,26 @@ impl TurnCards {
                 });
                 if let Some(steps) = c.body["steps"].as_array_mut() {
                     steps.push(json!({"name": name, "status": "running"}));
+                }
+                // Cited sources for the Result card: every page read and every search of the user's data.
+                let cited = match name.as_str() {
+                    "fetch_page" => input["url"].as_str().map(String::from),
+                    "search_my_stuff" => input["query"]
+                        .as_str()
+                        .map(|q| format!("your documents: \"{q}\"")),
+                    "read_file" => input["path"].as_str().map(String::from),
+                    _ => None,
+                };
+                if let Some(s) = cited {
+                    let list = c
+                        .body
+                        .as_object_mut()
+                        .map(|o| o.entry("cited").or_insert(json!([])));
+                    if let Some(Value::Array(a)) = list
+                        && !a.iter().any(|x| x == &json!(s))
+                    {
+                        a.push(json!(s));
+                    }
                 }
                 c.updated_ms = now_ms();
                 (self.sink)(c.clone());
@@ -203,7 +228,7 @@ impl TurnCards {
                         )
                         .with(
                             CardStatus::Done,
-                            json!({"text": t.text, "partial": t.partial}),
+                            json!({"text": t.text, "partial": t.partial, "sources": c.body["cited"].clone()}),
                         ),
                     );
                 }
@@ -280,7 +305,7 @@ mod tests {
             turn_id: 3,
             id: name.into(),
             name: name.into(),
-            input: json!({}),
+            input: json!({"url": "https://example.com/vr"}),
         };
         let finish = |name: &str| AgentEvent::ToolCallFinished {
             turn_id: 3,
@@ -313,6 +338,11 @@ mod tests {
         let result = all.last().unwrap();
         assert_eq!(result.kind, CardKind::Result);
         assert_eq!(result.body["text"], "Here it is.");
+        assert_eq!(
+            result.body["sources"],
+            json!(["https://example.com/vr"]),
+            "cited sources ride on the result"
+        );
         assert!(
             all.iter()
                 .any(|c| c.kind == CardKind::Agent && c.status == CardStatus::Done)

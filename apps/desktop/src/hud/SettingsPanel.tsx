@@ -219,6 +219,24 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             </li>
           ))}
         </ul>
+        <p className="mt-2 text-white/50">
+          {view.local.chunks} passages indexed for search_my_stuff (PDFs too). Search by{' '}
+          {view.local.meaning_search ? 'keyword and meaning.' : 'keyword only.'}
+          {view.local.meaning_search ? null : (
+            <button
+              type="button"
+              className="hud-btn ml-2 py-0"
+              onClick={() =>
+                void attempt(async () => {
+                  await call('download_embedder');
+                  await reload();
+                })
+              }
+            >
+              Add meaning search (23 MB)
+            </button>
+          )}
+        </p>
         <button
           type="button"
           className="hud-btn mt-2"
