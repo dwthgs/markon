@@ -5,6 +5,7 @@ pub mod mac;
 pub mod mcp;
 pub mod telegram;
 pub mod tool;
+pub mod watch;
 
 pub use markon_provider::BoxFuture;
 use serde::Serialize;
