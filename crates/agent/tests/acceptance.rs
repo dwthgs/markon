@@ -335,6 +335,43 @@ async fn a_paused_server_search_is_resumed_without_a_new_user_message() {
 }
 
 #[tokio::test]
+async fn thinking_from_earlier_turns_is_not_sent_again() {
+    // A thinking block is bound to the exact prompt it was made under. The system prompt changes each
+    // turn (memory hits), so the API rejects an old one ("bound to a different conversation").
+    let mut first = FakeProvider::text("Hi.");
+    first.insert(
+        0,
+        Ok(ChatDelta::Block(
+            json!({"type": "thinking", "thinking": "hm", "signature": "s"}),
+        )),
+    );
+    let mut only_thinking = FakeProvider::text("x");
+    only_thinking.retain(|d| !matches!(d, Ok(ChatDelta::Block(_)) | Ok(ChatDelta::Text(_))));
+    only_thinking.insert(
+        0,
+        Ok(ChatDelta::Block(
+            json!({"type": "thinking", "thinking": "hm", "signature": "s"}),
+        )),
+    );
+    let (a, fake, mut rx) = agent(vec![first, only_thinking, FakeProvider::text("Again.")]);
+    a.submit(UserTurn::text("one")).await;
+    a.submit(UserTurn::text("two")).await;
+    a.submit(UserTurn::text("three")).await;
+    drain(&mut rx).await;
+    let third = &fake.requests.lock().unwrap()[2];
+    let sent = serde_json::to_string(&third.messages).unwrap();
+    assert!(
+        !sent.contains("\"thinking\""),
+        "old thinking dropped: {sent}"
+    );
+    assert!(
+        third.messages.iter().all(|m| !m.content.is_empty()),
+        "no empty messages"
+    );
+    assert!(sent.contains("Hi."), "the text of the reply stays");
+}
+
+#[tokio::test]
 async fn a_reply_that_stalls_ends_with_an_apology_instead_of_thinking_forever() {
     let mut fake = FakeProvider::new(vec![FakeProvider::text("never arrives")]);
     fake.delay = Duration::from_secs(3600);

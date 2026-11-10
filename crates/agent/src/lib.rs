@@ -406,6 +406,7 @@ impl Agent {
                 content: vec![json!({"type": "text", "text": text})],
             });
         }
+        drop_thinking(&mut msgs);
         *self.history.lock().expect("history lock") = msgs;
         self.emit(AgentEvent::TurnFinished(TurnSummary {
             turn_id,
@@ -661,4 +662,16 @@ pub fn cap_utf8(s: &str, cap: usize) -> String {
         end,
         s.len()
     )
+}
+
+/// Thinking is bound to the exact prompt it was made under, and the system prompt changes every turn
+/// (memory hits), so a finished turn keeps only what was said and done. Within a turn it is kept,
+/// because a tool loop must send it back unchanged.
+fn drop_thinking(msgs: &mut Vec<Message>) {
+    for m in msgs.iter_mut() {
+        m.content
+            .retain(|b| !matches!(b["type"].as_str(), Some("thinking" | "redacted_thinking")));
+    }
+    // A reply that was only thinking leaves nothing; the API joins the user turns either side of it.
+    msgs.retain(|m| !m.content.is_empty());
 }
