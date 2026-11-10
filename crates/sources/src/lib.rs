@@ -1,8 +1,10 @@
 //! Sources: what happened in the user's accounts, in one shape. Read-only.
+pub mod act;
 pub mod github;
 pub mod imap;
 pub mod mac;
 pub mod mcp;
+pub mod smtp;
 pub mod telegram;
 pub mod tool;
 pub mod watch;
@@ -67,7 +69,10 @@ pub async fn collect(sources: &[Arc<dyn Source>], since_ms: i64, limit: Duration
         async move {
             let result = match tokio::time::timeout(limit, f).await {
                 Ok(r) => r,
-                Err(_) => Err(SourceError::Failed(format!("{label} did not answer within {} s", limit.as_secs()))),
+                Err(_) => Err(SourceError::Failed(format!(
+                    "{label} did not answer within {} s",
+                    limit.as_secs()
+                ))),
             };
             Report { id, label, result }
         }

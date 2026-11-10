@@ -38,7 +38,11 @@ impl KeychainSession {
             home_dc: data.home_dc,
             dc_options: data.dc_options.values().cloned().collect(),
         };
-        Self { inner: MemorySession::from(data), saved: Mutex::new(snapshot), store }
+        Self {
+            inner: MemorySession::from(data),
+            saved: Mutex::new(snapshot),
+            store,
+        }
     }
 
     fn persist(&self) {
@@ -50,11 +54,14 @@ impl KeychainSession {
 
     pub fn is_signed_in(&self) -> bool {
         let s = self.saved.lock().expect("session");
-        s.dc_options.iter().any(|d| d.id == s.home_dc && d.auth_key.is_some())
+        s.dc_options
+            .iter()
+            .any(|d| d.id == s.home_dc && d.auth_key.is_some())
     }
 }
 
-type Fut<'a, T> = grammers_client::session::BoxFuture<'a, Result<T, <MemorySession as Session>::Error>>;
+type Fut<'a, T> =
+    grammers_client::session::BoxFuture<'a, Result<T, <MemorySession as Session>::Error>>;
 
 impl Session for KeychainSession {
     type Error = <MemorySession as Session>::Error;
@@ -132,14 +139,23 @@ impl Telegram {
 
     /// Step one: Telegram sends a code to the user's other devices.
     pub async fn request_code(&self, phone: &str) -> Result<(), String> {
-        let t = self.client.request_login_code(phone, &self.api_hash).await.map_err(|e| e.to_string())?;
+        let t = self
+            .client
+            .request_login_code(phone, &self.api_hash)
+            .await
+            .map_err(|e| e.to_string())?;
         *self.login.lock().expect("login") = Some(t);
         Ok(())
     }
 
     /// Step two: the code. Returns true when a two-step password is still needed.
     pub async fn sign_in(&self, code: &str) -> Result<bool, String> {
-        let token = self.login.lock().expect("login").take().ok_or("ask for a code first")?;
+        let token = self
+            .login
+            .lock()
+            .expect("login")
+            .take()
+            .ok_or("ask for a code first")?;
         match self.client.sign_in(&token, code.trim()).await {
             Ok(_) => Ok(false),
             Err(SignInError::PasswordRequired(p)) => {
@@ -152,22 +168,64 @@ impl Telegram {
 
     /// Step three, only with two-step verification on.
     pub async fn check_password(&self, password: &str) -> Result<(), String> {
-        let p = self.password.lock().expect("password").take().ok_or("no password was asked for")?;
-        self.client.check_password(p, password).await.map(|_| ()).map_err(|e| e.to_string())
+        let p = self
+            .password
+            .lock()
+            .expect("password")
+            .take()
+            .ok_or("no password was asked for")?;
+        self.client
+            .check_password(p, password)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     pub fn signed_in_locally(&self) -> bool {
         self.session.is_signed_in()
     }
 
+    /// Send a message to the chat whose name matches `to`. The caller has asked the user.
+    pub async fn send(&self, to: &str, text: &str) -> Result<(), String> {
+        let want = to.trim().to_lowercase();
+        let mut it = self.client.iter_dialogs();
+        let mut found = None;
+        let mut n = 0;
+        while let Some(d) = it.next().await.map_err(|e| e.to_string())? {
+            n += 1;
+            if d.peer()
+                .name()
+                .is_some_and(|name| name.to_lowercase() == want)
+            {
+                found = Some(d.peer_ref());
+                break;
+            }
+            if n > 200 {
+                break;
+            }
+        }
+        let peer = found.ok_or_else(|| format!("no Telegram chat called {to}"))?;
+        self.client
+            .send_message(peer, text)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     async fn unread(&self, since_ms: i64) -> Result<Vec<Item>, SourceError> {
         if !self.is_authorized().await {
-            return Err(SourceError::NotConnected("sign in to Telegram in settings".into()));
+            return Err(SourceError::NotConnected(
+                "sign in to Telegram in settings".into(),
+            ));
         }
         let mut it = self.client.iter_dialogs();
         let mut out = Vec::new();
         let mut seen = 0;
-        while let Some(d) = it.next().await.map_err(|e| SourceError::Failed(e.to_string()))? {
+        while let Some(d) = it
+            .next()
+            .await
+            .map_err(|e| SourceError::Failed(e.to_string()))?
+        {
             seen += 1;
             if seen > 40 {
                 break;
@@ -182,12 +240,20 @@ impl Telegram {
                 continue;
             }
             let chat = d.peer().name().unwrap_or("Telegram").to_string();
-            let who = m.sender().and_then(|s| s.name()).unwrap_or(&chat).to_string();
+            let who = m
+                .sender()
+                .and_then(|s| s.name())
+                .unwrap_or(&chat)
+                .to_string();
             out.push(Item {
                 source: "telegram".into(),
                 id: format!("{:?}:{}", d.peer_id(), m.id()),
                 who,
-                place: if unread > 1 { format!("{chat} ({unread} unread)") } else { chat },
+                place: if unread > 1 {
+                    format!("{chat} ({unread} unread)")
+                } else {
+                    chat
+                },
                 when_ms: when,
                 text: clip(m.text(), 600),
                 link: None,
@@ -233,6 +299,9 @@ mod tests {
         let again = KeychainSession::load(Some(&json), Arc::new(|_| {}));
         assert!(again.is_signed_in());
         assert_eq!(again.home_dc_id().unwrap(), 2);
-        assert_eq!(again.dc_option(2).unwrap().unwrap().auth_key, Some([7u8; 256]));
+        assert_eq!(
+            again.dc_option(2).unwrap().unwrap().auth_key,
+            Some([7u8; 256])
+        );
     }
 }

@@ -3035,6 +3035,7 @@ name = "markon-sources"
 version = "0.1.0"
 dependencies = [
  "async-imap",
+ "base64 0.23.1",
  "chrono",
  "flate2",
  "futures-util",

@@ -59,7 +59,11 @@ enum Stream {
 }
 
 impl AsyncRead for Stream {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             Stream::Plain(s) => Pin::new(s).poll_read(cx, buf),
             Stream::Tls(s) => Pin::new(s.as_mut()).poll_read(cx, buf),
@@ -68,7 +72,11 @@ impl AsyncRead for Stream {
 }
 
 impl AsyncWrite for Stream {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, b: &[u8]) -> Poll<std::io::Result<usize>> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        b: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
             Stream::Plain(s) => Pin::new(s).poll_write(cx, b),
             Stream::Tls(s) => Pin::new(s.as_mut()).poll_write(cx, b),
@@ -89,14 +97,17 @@ impl AsyncWrite for Stream {
 }
 
 async fn connect(host: &str, port: u16) -> Result<Stream, String> {
-    let tcp = TcpStream::connect((host, port)).await.map_err(|e| format!("cannot reach {host}: {e}"))?;
+    let tcp = TcpStream::connect((host, port))
+        .await
+        .map_err(|e| format!("cannot reach {host}: {e}"))?;
     // Plain IMAP only to the local test server; real mail always goes over TLS.
     if host == "127.0.0.1" {
         return Ok(Stream::Plain(tcp));
     }
     use rustls_platform_verifier::ConfigVerifierExt;
     let cfg = rustls::ClientConfig::with_platform_verifier().map_err(|e| e.to_string())?;
-    let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
+    let name =
+        rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
     let tls = tokio_rustls::TlsConnector::from(Arc::new(cfg))
         .connect(name, tcp)
         .await
@@ -106,7 +117,10 @@ async fn connect(host: &str, port: u16) -> Result<Stream, String> {
 
 /// IMAP's SEARCH date: `10-Nov-2026`.
 pub fn imap_date(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default().format("%d-%b-%Y").to_string()
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .format("%d-%b-%Y")
+        .to_string()
 }
 
 /// One message as an item, from its raw bytes.
@@ -130,13 +144,24 @@ pub fn parse_message(source: &str, uid: u32, raw: &[u8], unread: bool) -> Option
         who,
         place: subject.clone(),
         when_ms: m.date().map(|d| d.to_timestamp() * 1000).unwrap_or(0),
-        text: clip(&format!("{subject}: {}", body.split_whitespace().collect::<Vec<_>>().join(" ")), 600),
+        text: clip(
+            &format!(
+                "{subject}: {}",
+                body.split_whitespace().collect::<Vec<_>>().join(" ")
+            ),
+            600,
+        ),
         link: None,
         unread,
     })
 }
 
-async fn fetch_unread(acct: &MailAccount, password: &str, source: &str, since_ms: i64) -> Result<Vec<Item>, SourceError> {
+async fn fetch_unread(
+    acct: &MailAccount,
+    password: &str,
+    source: &str,
+    since_ms: i64,
+) -> Result<Vec<Item>, SourceError> {
     let failed = |e: String| SourceError::Failed(e);
     let stream = connect(&acct.host, acct.port).await.map_err(failed)?;
     let mut client = async_imap::Client::new(stream);
@@ -145,11 +170,12 @@ async fn fetch_unread(acct: &MailAccount, password: &str, source: &str, since_ms
         .await
         .map_err(|e| failed(e.to_string()))?
         .ok_or_else(|| failed("the server closed the connection".into()))?;
-    let mut s = client
-        .login(&acct.user, password)
+    let mut s = client.login(&acct.user, password).await.map_err(|(e, _)| {
+        SourceError::NotConnected(format!("{} refused the app password ({e})", acct.host))
+    })?;
+    s.examine("INBOX")
         .await
-        .map_err(|(e, _)| SourceError::NotConnected(format!("{} refused the app password ({e})", acct.host)))?;
-    s.examine("INBOX").await.map_err(|e| failed(e.to_string()))?;
+        .map_err(|e| failed(e.to_string()))?;
     let mut uids: Vec<u32> = s
         .uid_search(format!("UNSEEN SINCE {}", imap_date(since_ms)))
         .await
@@ -160,7 +186,11 @@ async fn fetch_unread(acct: &MailAccount, password: &str, source: &str, since_ms
     uids.truncate(25);
     let mut out = Vec::new();
     if !uids.is_empty() {
-        let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let set = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         let fetches: Vec<_> = s
             .uid_fetch(set, "(UID BODY.PEEK[])")
             .await
@@ -182,6 +212,32 @@ async fn fetch_unread(acct: &MailAccount, password: &str, source: &str, since_ms
     Ok(out)
 }
 
+/// The folder an archived message goes to: Gmail keeps everything in All Mail.
+pub fn archive_folder(host: &str) -> &'static str {
+    if host == "imap.gmail.com" {
+        "[Gmail]/All Mail"
+    } else {
+        "Archive"
+    }
+}
+
+/// Move one message out of the inbox. The caller has asked the user.
+pub async fn archive(acct: &MailAccount, password: &str, uid: u32) -> Result<(), String> {
+    let stream = connect(&acct.host, acct.port).await?;
+    let mut client = async_imap::Client::new(stream);
+    client.read_response().await.map_err(|e| e.to_string())?;
+    let mut s = client
+        .login(&acct.user, password)
+        .await
+        .map_err(|(e, _)| e.to_string())?;
+    s.select("INBOX").await.map_err(|e| e.to_string())?;
+    s.uid_mv(uid.to_string(), archive_folder(&acct.host))
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = s.logout().await;
+    Ok(())
+}
+
 impl Source for Imap {
     fn id(&self) -> &str {
         &self.id
@@ -192,7 +248,9 @@ impl Source for Imap {
     fn fetch(&self, since_ms: i64) -> BoxFuture<'static, Result<Vec<Item>, SourceError>> {
         let (acct, pw, id) = (self.account.clone(), (self.password)(), self.id.clone());
         Box::pin(async move {
-            let pw = pw.ok_or_else(|| SourceError::NotConnected(format!("no app password saved for {}", acct.user)))?;
+            let pw = pw.ok_or_else(|| {
+                SourceError::NotConnected(format!("no app password saved for {}", acct.user))
+            })?;
             fetch_unread(&acct, &pw, &id, since_ms).await
         })
     }
