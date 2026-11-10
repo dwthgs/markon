@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 pub const TAP: Duration = Duration::from_millis(350);
 /// After a tap, give up if no speech starts within this long.
 pub const NO_SPEECH: Duration = Duration::from_secs(8);
+/// After Markon speaks, keep listening this long for a reply without the key.
+pub const FOLLOW_UP: Duration = Duration::from_secs(6);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -12,6 +14,8 @@ pub enum Action {
     Listen(u64),
     /// Stop listening, transcribe and send.
     Finish,
+    /// Stop listening and drop the audio: nobody spoke.
+    Abandon,
     Nothing,
 }
 
@@ -26,6 +30,10 @@ pub struct Ptt {
 
 impl Ptt {
     pub fn pressed(&mut self, now: Instant) -> Action {
+        if self.latched && !self.heard {
+            // Listening hands-free but nothing said yet: this press starts a normal hold or tap.
+            self.latched = false;
+        }
         if self.latched {
             // A second tap ends hands-free listening; its release is not a new turn.
             self.latched = false;
@@ -52,6 +60,17 @@ impl Ptt {
         }
     }
 
+    /// Markon finished speaking: listen hands-free for a reply. `None` while the key is down.
+    pub fn follow_up(&mut self) -> Option<u64> {
+        if self.down_at.is_some() || self.latched {
+            return None;
+        }
+        self.latched = true;
+        self.heard = false;
+        self.session += 1;
+        Some(self.session)
+    }
+
     pub fn speech_started(&mut self) {
         self.heard = true;
     }
@@ -63,7 +82,12 @@ impl Ptt {
 
     /// The no-speech timer for `session` fired.
     pub fn timed_out(&mut self, session: u64) -> Action {
-        self.unlatch(self.latched && !self.heard && session == self.session)
+        if self.latched && !self.heard && session == self.session {
+            self.latched = false;
+            Action::Abandon
+        } else {
+            Action::Nothing
+        }
     }
 
     fn unlatch(&mut self, when: bool) -> Action {
@@ -111,6 +135,7 @@ mod tests {
         let t = Instant::now();
         p.pressed(t);
         p.released(t + Duration::from_millis(100));
+        p.speech_started();
         assert_eq!(p.pressed(t + Duration::from_secs(3)), Action::Finish);
         assert_eq!(p.released(t + Duration::from_secs(4)), Action::Nothing);
     }
@@ -123,7 +148,7 @@ mod tests {
             panic!()
         };
         p.released(t + Duration::from_millis(100));
-        assert_eq!(p.timed_out(s), Action::Finish);
+        assert_eq!(p.timed_out(s), Action::Abandon);
     }
 
     #[test]
@@ -137,5 +162,32 @@ mod tests {
         p.speech_started();
         assert_eq!(p.timed_out(s), Action::Nothing);
         assert_eq!(p.timed_out(s + 1), Action::Nothing);
+    }
+
+    #[test]
+    fn after_a_reply_it_listens_for_a_follow_up() {
+        let mut p = Ptt::default();
+        let s = p.follow_up().expect("listens");
+        p.speech_started();
+        assert_eq!(p.speech_ended(), Action::Finish);
+        let s2 = p.follow_up().expect("listens again");
+        assert!(s2 > s);
+        assert_eq!(p.timed_out(s2), Action::Abandon, "silence ends it quietly");
+    }
+
+    #[test]
+    fn pressing_during_a_silent_follow_up_starts_a_normal_hold() {
+        let mut p = Ptt::default();
+        let t = Instant::now();
+        p.follow_up();
+        assert!(matches!(p.pressed(t), Action::Listen(_)));
+        assert_eq!(p.released(t + Duration::from_secs(2)), Action::Finish);
+    }
+
+    #[test]
+    fn no_follow_up_while_the_key_is_held() {
+        let mut p = Ptt::default();
+        p.pressed(Instant::now());
+        assert_eq!(p.follow_up(), None);
     }
 }

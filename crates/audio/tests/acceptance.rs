@@ -87,7 +87,7 @@ fn features_track_loudness_pitch_and_spectrum() {
 }
 
 #[test]
-fn end_of_speech_waits_700_ms_or_1_2_s_mid_clause() {
+fn end_of_speech_waits_1_2_s_or_2_s_mid_clause() {
     let mut vad = Vad::new(SR);
     let talk = sine(180.0, 1.0, 0.2);
     let hush = vec![0.0f32; 160];
@@ -106,10 +106,10 @@ fn end_of_speech_waits_700_ms_or_1_2_s_mid_clause() {
         if let Some(e) = vad.push(&hush, false) {
             break e;
         }
-        assert!(ms < 2000);
+        assert!(ms < 3000);
     };
     assert_eq!(end, EndOfSpeech::Ended);
-    assert!((690..=720).contains(&ms), "ended after {ms} ms");
+    assert!((1190..=1220).contains(&ms), "ended after {ms} ms");
 
     let mut vad = Vad::new(SR);
     for c in talk.chunks(160) {
@@ -120,7 +120,7 @@ fn end_of_speech_waits_700_ms_or_1_2_s_mid_clause() {
         ms += 10;
     }
     assert!(
-        (1190..=1220).contains(&ms),
+        (1990..=2020).contains(&ms),
         "mid-clause ended after {ms} ms"
     );
 }

@@ -14,8 +14,9 @@ pub struct Vad {
 }
 
 /// Silence that ends a turn, and the longer wait when the partial transcript ends mid-clause.
-pub const END_MS: usize = 700;
-pub const END_MID_CLAUSE_MS: usize = 1200;
+/// a 700 ms / 1.2 s pause cut people off during normal thinking pauses.
+pub const END_MS: usize = 1200;
+pub const END_MID_CLAUSE_MS: usize = 2000;
 const MIN_LEVEL: f32 = 0.01;
 
 impl Vad {
