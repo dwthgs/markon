@@ -36,6 +36,73 @@ pub trait Platform: Send + Sync {
     fn open_mic_settings(&self) -> Result<(), PlatformError>;
     /// True while the user is likely in a call or sharing the screen (scheduled agents stay quiet).
     fn in_call_or_sharing(&self) -> bool;
+    /// Control the Spotify app and report what it is playing.
+    fn spotify(&self, cmd: SpotifyCommand<'_>) -> Result<NowPlaying, PlatformError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpotifyCommand<'a> {
+    Status,
+    Play,
+    Pause,
+    Next,
+    Previous,
+    /// A `spotify:kind:id` URI, already validated by the caller.
+    PlayUri(&'a str),
+}
+
+/// What Spotify is playing. Fields are empty when nothing is loaded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NowPlaying {
+    pub track: String,
+    pub artist: String,
+    pub album: String,
+    pub artwork: String,
+    /// "playing", "paused" or "stopped".
+    pub state: String,
+    pub position_s: f64,
+    pub duration_s: f64,
+}
+
+/// A Spotify URI safe to place inside an AppleScript string.
+fn plain_uri(uri: &str) -> bool {
+    uri.starts_with("spotify:") && uri.chars().all(|c| c.is_ascii_alphanumeric() || c == ':')
+}
+
+/// The AppleScript for a command: one line per field, in `NowPlaying` order.
+pub fn spotify_script(cmd: SpotifyCommand<'_>) -> Option<String> {
+    let action = match cmd {
+        SpotifyCommand::Status => String::new(),
+        SpotifyCommand::Play => "play\n".into(),
+        SpotifyCommand::Pause => "pause\n".into(),
+        SpotifyCommand::Next => "next track\n".into(),
+        SpotifyCommand::Previous => "previous track\n".into(),
+        SpotifyCommand::PlayUri(u) if plain_uri(u) => format!("play track \"{u}\"\n"),
+        SpotifyCommand::PlayUri(_) => return None,
+    };
+    Some(format!(
+        "tell application \"Spotify\"\n{action}\
+         if player state is stopped then return \"\" & linefeed & \"\" & linefeed & \"\" & linefeed & \"\" & linefeed & \"stopped\" & linefeed & \"0\" & linefeed & \"0\"\n\
+         set t to current track\n\
+         return (name of t) & linefeed & (artist of t) & linefeed & (album of t) & linefeed & (artwork url of t) & linefeed & (player state as string) & linefeed & (player position as string) & linefeed & ((duration of t) / 1000 as string)\n\
+         end tell"
+    ))
+}
+
+pub fn parse_now_playing(out: &str) -> NowPlaying {
+    let l: Vec<&str> = out.trim_end_matches('\n').split('\n').collect();
+    let s = |i: usize| l.get(i).map(|x| x.trim().to_string()).unwrap_or_default();
+    // AppleScript prints decimals with the user's locale ("12,5").
+    let n = |i: usize| s(i).replace(',', ".").parse().unwrap_or(0.0);
+    NowPlaying {
+        track: s(0),
+        artist: s(1),
+        album: s(2),
+        artwork: s(3),
+        state: s(4),
+        position_s: n(5),
+        duration_s: n(6),
+    }
 }
 
 /// Only web and mail links; never `file:` or custom schemes that could launch arbitrary handlers.
@@ -161,6 +228,28 @@ impl Platform for MacOs {
         run_open(&["x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"])
     }
 
+    fn spotify(&self, cmd: SpotifyCommand<'_>) -> Result<NowPlaying, PlatformError> {
+        if !std::path::Path::new("/Applications/Spotify.app").exists() {
+            return Err(PlatformError::Open("Spotify is not installed".into()));
+        }
+        let script = spotify_script(cmd)
+            .ok_or_else(|| PlatformError::Refused("not a Spotify link".into()))?;
+        let out = std::process::Command::new("/usr/bin/osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|e| PlatformError::Open(e.to_string()))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(PlatformError::Open(if err.contains("-1743") {
+                "Markon is not allowed to control Spotify (System Settings > Privacy > Automation)"
+                    .into()
+            } else {
+                format!("Spotify did not respond: {}", err.trim())
+            }));
+        }
+        Ok(parse_now_playing(&String::from_utf8_lossy(&out.stdout)))
+    }
+
     fn in_call_or_sharing(&self) -> bool {
         // shortcut: process-name heuristic; upgrade to the CoreAudio "device in use" property when it misfires.
         let Ok(out) = std::process::Command::new("/bin/ps")
@@ -196,6 +285,42 @@ mod tests {
         assert!(!is_safe_app_name("-n"));
         assert!(!is_safe_app_name("/System/Applications/Calculator.app"));
         assert!(!is_safe_app_name("Calc;rm -rf"));
+    }
+
+    #[test]
+    fn spotify_scripts_cannot_be_injected() {
+        let s = spotify_script(SpotifyCommand::PlayUri(
+            "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+        ))
+        .unwrap();
+        assert!(s.contains("play track \"spotify:track:4uLU6hMCjMI75M1A2tKUQC\""));
+        assert_eq!(
+            spotify_script(SpotifyCommand::PlayUri(
+                "spotify:x\" & do shell script \"id"
+            )),
+            None
+        );
+        assert!(
+            !spotify_script(SpotifyCommand::Status)
+                .unwrap()
+                .contains("play track")
+        );
+        assert!(
+            spotify_script(SpotifyCommand::Pause)
+                .unwrap()
+                .contains("\npause\n")
+        );
+    }
+
+    #[test]
+    fn reads_what_spotify_reports() {
+        let n =
+            parse_now_playing("Song\nBand\nAlbum\nhttps://i.scdn.co/a\nplaying\n12,5\n200.25\n");
+        assert_eq!(n.track, "Song");
+        assert_eq!(n.state, "playing");
+        assert_eq!(n.position_s, 12.5);
+        assert_eq!(n.duration_s, 200.25);
+        assert_eq!(parse_now_playing("\n\n\n\nstopped\n0\n0").state, "stopped");
     }
 
     #[test]
