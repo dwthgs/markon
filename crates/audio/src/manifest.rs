@@ -19,6 +19,10 @@ pub struct Entry {
     pub size: u64,
     pub sha256: String,
     pub license: String,
+    /// Downloaded only when the user asks for it (the built-in language model), so it is
+    /// not part of the start-up check.
+    #[serde(default)]
+    pub on_demand: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -52,18 +56,19 @@ impl Manifest {
             .ok_or_else(|| ManifestError::Unknown(id.into()))
     }
 
-    /// Check every file. Returns the first problem found.
+    /// Check every file needed at start. Returns the first problem found.
     pub fn verify(&self, dir: &Path) -> Result<(), ManifestError> {
         self.files
             .iter()
+            .filter(|e| !e.on_demand)
             .try_for_each(|e| e.verify(dir).map(|_| ()))
     }
 
-    /// Entries that are missing or wrong and need downloading.
+    /// Entries needed at start that are missing or wrong and need downloading.
     pub fn missing(&self, dir: &Path) -> Vec<&Entry> {
         self.files
             .iter()
-            .filter(|e| e.verify(dir).is_err())
+            .filter(|e| !e.on_demand && e.verify(dir).is_err())
             .collect()
     }
 }
@@ -157,5 +162,20 @@ impl Entry {
         }
         tokio::fs::rename(&part, &path).await?;
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_demand_files_are_not_needed_at_start() {
+        let m = Manifest::bundled();
+        let dir = std::path::Path::new("/nonexistent-markon-models");
+        let llm = m.entry("qwen2.5-1.5b-instruct").unwrap();
+        assert!(llm.on_demand);
+        assert!(m.missing(dir).iter().all(|e| !e.on_demand));
+        assert!(!m.missing(dir).is_empty(), "the voice files still are");
     }
 }
