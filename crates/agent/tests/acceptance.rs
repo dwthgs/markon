@@ -560,3 +560,66 @@ async fn the_same_call_over_and_over_is_stopped() {
         outs[4]
     );
 }
+
+// ---------- Long conversations stay fast ----------
+
+#[tokio::test]
+async fn old_turns_are_summarised_and_recent_ones_kept() {
+    let long = "x".repeat(400);
+    let mut scripts: Vec<_> = (1..=5)
+        .map(|n| FakeProvider::text(&format!("answer {n} {long}")))
+        .collect();
+    scripts.push(FakeProvider::text(
+        "SUMMARY: the user asked about Lalibela flights.",
+    ));
+    scripts.push(FakeProvider::text("the 14th"));
+    let fake = Arc::new(FakeProvider::new(scripts));
+    let (a, mut rx) = Agent::new(
+        fake.clone(),
+        Arc::new(Tools),
+        AgentConfig {
+            compress_over: 1_000,
+            retry_base: Duration::from_millis(1),
+            ..AgentConfig::default()
+        },
+    );
+    for q in [
+        "flights to Lalibela?",
+        "and hotels?",
+        "and the weather?",
+        "trains?",
+        "buses?",
+    ] {
+        a.submit(UserTurn::text(q)).await;
+    }
+    // Ten messages, well over the limit: the next turn starts by summarising the oldest.
+    a.submit(UserTurn::text("which day was it?")).await;
+    drain(&mut rx).await;
+    let reqs = fake.requests.lock().unwrap();
+    let summary_req = reqs
+        .iter()
+        .find(|r| r.system.starts_with("Summarise"))
+        .expect("a summary was asked for");
+    assert!(summary_req.tools.is_empty());
+    assert!(
+        serde_json::to_string(&summary_req.messages)
+            .unwrap()
+            .contains("flights to Lalibela")
+    );
+    let last = serde_json::to_string(&reqs.last().unwrap().messages).unwrap();
+    assert!(
+        last.contains(
+            "Summary of our earlier conversation: SUMMARY: the user asked about Lalibela flights."
+        ),
+        "{last}"
+    );
+    assert!(
+        !last.contains("flights to Lalibela?"),
+        "the oldest turn is only in the summary"
+    );
+    assert!(
+        last.contains("buses?") && last.contains("which day was it?"),
+        "recent turns are kept"
+    );
+    assert_eq!(a.history().len(), 2 + 8 + 2);
+}
