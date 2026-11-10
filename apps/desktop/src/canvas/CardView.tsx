@@ -158,7 +158,12 @@ export function CardView({
           ✕
         </button>
       </header>
-      <h3 className="mb-1.5 truncate font-heading text-[12px] tracking-wide text-white normal-case">
+      <h3
+        className={cn(
+          'mb-1.5 truncate font-heading text-[12px] tracking-wide text-white normal-case',
+          card.kind === 'music' && 'sr-only',
+        )}
+      >
         {card.title}
       </h3>
       <div data-testid="card-body" className="min-h-0 flex-1 overflow-y-auto select-text">

@@ -78,6 +78,7 @@ test('the Spotify card shows the track and its buttons control Spotify', async (
   await emit(page, 'markon://card', card('s', 'music', 'Song', playing));
   const c = page.getByRole('article', { name: /music: song/i });
   await expect(c).toContainText('Band');
+  await expect(c).toHaveAttribute('data-big', 'false');
   await c.getByRole('button', { name: 'Pause' }).click();
   await c.getByRole('button', { name: 'Next track' }).click();
   const actions = (await calls(page, 'spotify_control')).map((a) => (a as { action: string }).action);

@@ -49,7 +49,8 @@ export function layout(
     const order = [...zones].sort((a, b) => a.used - b.used);
     for (const c of group) {
       // A card made bigger still fits as a normal one when the screen is short.
-      const need = (big.has(c.id) || MEDIA.has(c.kind)) && slots >= 2 ? 2 : 1;
+      const tall = MEDIA.has(c.kind) && c.kind !== 'music';
+      const need = (big.has(c.id) || tall) && slots >= 2 ? 2 : 1;
       const z = order.find((z) => z.used + need <= slots);
       if (z) {
         z.ids.push(c.id);
