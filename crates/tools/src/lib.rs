@@ -1,9 +1,11 @@
 //! Tool runtime: native tools and MCP servers behind one list, run under permission
 //! tiers, each call reported as a canvas card.
 pub mod cards;
+pub mod guard;
 pub mod mcp;
 pub mod media;
 pub mod native;
+pub mod oauth;
 pub mod permissions;
 
 use cards::{Card, CardKind, CardSink, CardStatus};
@@ -28,6 +30,8 @@ pub struct Runtime {
     pub mcp: RwLock<Vec<Arc<mcp::McpServer>>>,
     http: reqwest::Client,
     pub cache_dir: PathBuf,
+    /// Test hook: lets `fetch_page` reach a local mock server. Never set in the app.
+    pub allow_private_hosts: bool,
 }
 
 struct Outcome {
@@ -79,9 +83,12 @@ impl Runtime {
             http: reqwest::Client::builder()
                 .user_agent("Markon/0.1 (+https://markon.app)")
                 .connect_timeout(Duration::from_secs(10))
+                .dns_resolver(Arc::new(guard::PublicOnly))
+                .redirect(guard::redirect_policy())
                 .build()
                 .expect("http client"),
             cache_dir: std::env::temp_dir().join("markon-cache"),
+            allow_private_hosts: false,
         }
     }
 
@@ -102,6 +109,10 @@ impl Runtime {
     ) -> Result<(String, String, String), String> {
         if !markon_platform::is_safe_url(url) || url.starts_with("mailto:") {
             return Err(format!("only http and https pages can be fetched: {url}"));
+        }
+        let parsed = reqwest::Url::parse(url).map_err(|e| format!("{url} is not a link: {e}"))?;
+        if let Some(why) = guard::blocked_url(&parsed).filter(|_| !self.allow_private_hosts) {
+            return Err(format!("Markon does not fetch pages on this Mac or its network: {why}"));
         }
         let fut = async {
             let r = self
@@ -170,6 +181,12 @@ impl Runtime {
                     .read(&c.name, Self::arg(input, "path").map_err(failed)?.as_ref())
                     .await
                     .map_err(blocked)?;
+                if guard::is_secret_file(&p) {
+                    return Err(blocked(format!(
+                        "{} holds secrets (keys or passwords), so Markon does not read it",
+                        p.display()
+                    )));
+                }
                 let meta = std::fs::metadata(&p).map_err(|e| failed(e.to_string()))?;
                 if meta.len() > MAX_FILE {
                     return Err(failed(format!("{} is larger than 2 MB", p.display())));

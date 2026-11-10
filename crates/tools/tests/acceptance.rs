@@ -205,7 +205,8 @@ async fn the_full_output_stays_on_the_card() {
 
 #[tokio::test]
 async fn a_page_that_never_loads_times_out() {
-    let s = setup("page", vec![]);
+    let mut s = setup("page", vec![]);
+    s.rt.allow_private_hosts = true;
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move {
@@ -219,6 +220,57 @@ async fn a_page_that_never_loads_times_out() {
             .unwrap_err();
     assert!(err.contains("did not load"), "{err}");
     assert!(t.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn pages_on_this_mac_or_its_network_are_refused() {
+    let s = setup("ssrf", vec![]);
+    for url in [
+        "http://127.0.0.1:9/",
+        "http://localhost/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://192.168.1.1/",
+        "http://[::1]/",
+    ] {
+        let err = s.rt.call(call("fetch_page", json!({"url": url}))).await.unwrap_err();
+        assert!(err.contains("does not fetch"), "{url}: {err}");
+    }
+}
+
+#[tokio::test]
+async fn a_redirect_to_a_private_address_is_refused() {
+    let mut s = setup("ssrf-redirect", vec![]);
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut c, _) = l.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = c.read(&mut buf).await;
+        let _ = c
+            .write_all(b"HTTP/1.1 302 Found\r\nlocation: http://169.254.169.254/\r\ncontent-length: 0\r\n\r\n")
+            .await;
+    });
+    // The first hop is the local mock (allowed by the test hook); the redirect itself is checked.
+    s.rt.allow_private_hosts = true;
+    let err = s.rt.fetch_with_timeout(&format!("http://{addr}/"), Duration::from_secs(5)).await.unwrap_err();
+    assert!(err.contains("private") || err.contains("redirect"), "{err}");
+}
+
+#[tokio::test]
+async fn secret_files_are_never_read_even_in_an_approved_folder() {
+    let s = setup("secrets", vec![]);
+    std::fs::write(s.dir.join(".env"), "ANTHROPIC_API_KEY=sk-ant-x").unwrap();
+    std::fs::create_dir_all(s.dir.join(".ssh")).unwrap();
+    std::fs::write(s.dir.join(".ssh/id_ed25519"), "-----BEGIN OPENSSH PRIVATE KEY-----").unwrap();
+    for p in [".env", ".ssh/id_ed25519"] {
+        let path = s.dir.join(p);
+        let err = s.rt.call(call("read_file", json!({"path": path}))).await.unwrap_err();
+        assert!(err.contains("holds secrets"), "{p}: {err}");
+    }
+    std::fs::write(s.dir.join("notes.txt"), "fine").unwrap();
+    let ok = s.rt.call(call("read_file", json!({"path": s.dir.join("notes.txt")}))).await;
+    assert_eq!(ok.unwrap(), "fine");
 }
 
 // ---------- MCP ----------

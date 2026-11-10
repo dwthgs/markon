@@ -17,6 +17,8 @@ pub enum CardKind {
     Audio,
     Video,
     Music,
+    /// What one source returned for "what did I miss".
+    Source,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
