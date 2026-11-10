@@ -65,12 +65,32 @@ impl UserTurn {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub input: Value,
     pub turn_id: u64,
+    /// The conversation has read outside content: a send must ask, whatever was remembered.
+    pub tainted: bool,
+}
+
+/// Tools whose output is someone else's words: web pages, files, messages, mail, MCP results.
+pub fn reads_outside(name: &str) -> bool {
+    name.contains("__")
+        || name.starts_with("browser")
+        || [
+            "fetch_page",
+            "read_file",
+            "list_files",
+            "what_did_i_miss",
+            "load_skill",
+            "search_my_stuff",
+            "read_pdf",
+            "list_drafts",
+            "research",
+        ]
+        .contains(&name)
 }
 
 /// Native tools and MCP servers behind one list (implemented in `markon-tools`).
@@ -198,6 +218,8 @@ pub struct Agent {
     turn_lock: tokio::sync::Mutex<()>,
     cancel: watch::Sender<u64>,
     next_turn: AtomicU64,
+    /// Outside content is in the history. Cleared only with the history.
+    tainted: std::sync::atomic::AtomicBool,
 }
 
 enum RoundEnd {
@@ -229,6 +251,7 @@ impl Agent {
             turn_lock: tokio::sync::Mutex::new(()),
             cancel: watch::channel(0).0,
             next_turn: AtomicU64::new(1),
+            tainted: std::sync::atomic::AtomicBool::new(false),
         };
         (agent, rx)
     }
@@ -252,6 +275,17 @@ impl Agent {
 
     pub fn history(&self) -> Vec<Message> {
         self.history.lock().expect("history lock").clone()
+    }
+
+    /// Whether the conversation has read outside content.
+    pub fn tainted(&self) -> bool {
+        self.tainted.load(Ordering::SeqCst)
+    }
+
+    /// Start over: no history, so nothing outside is in front of the model any more.
+    pub fn clear_history(&self) {
+        self.history.lock().expect("history lock").clear();
+        self.tainted.store(false, Ordering::SeqCst);
     }
 
     pub fn state(&self) -> AgentState {
@@ -320,7 +354,11 @@ impl Agent {
             .tools
             .specs()
             .into_iter()
-            .filter(|t| turn.tools.as_ref().is_none_or(|allowed| allowed.contains(&t.name)))
+            .filter(|t| {
+                turn.tools
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.contains(&t.name))
+            })
             .collect();
         let mut guard = loop_guard::LoopGuard::default();
         // Work on a copy: history is only committed when the turn finishes, so a cancel leaves nothing behind.
@@ -564,6 +602,7 @@ impl Agent {
                     name,
                     input,
                     turn_id,
+                    tainted: false,
                 }),
                 Some(Ok(ChatDelta::Usage {
                     input_tokens,
@@ -621,7 +660,13 @@ impl Agent {
         let deadline = tokio::time::Instant::now() + limit;
         let known: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         let mut handles = Vec::new();
-        for c in calls {
+        let tainted = self.tainted();
+        for mut c in calls {
+            c.tainted = tainted;
+            if reads_outside(&c.name) {
+                // Set before it runs: a cancelled read may still have put text in front of the model.
+                self.tainted.store(true, Ordering::SeqCst);
+            }
             self.emit(AgentEvent::ToolCallStarted {
                 turn_id: c.turn_id,
                 id: c.id.clone(),
@@ -629,28 +674,29 @@ impl Agent {
                 input: c.input.clone(),
             });
             let verdict = guard.check(&c.name, &c.input);
-            let fut: BoxFuture<'static, Result<String, String>> = if let loop_guard::Verdict::Refuse(msg) = verdict {
-                Box::pin(async move { Err(msg) })
-            } else if known.contains(&c.name.as_str()) {
-                let warn = match verdict {
-                    loop_guard::Verdict::Warn(m) => Some(m),
-                    _ => None,
+            let fut: BoxFuture<'static, Result<String, String>> =
+                if let loop_guard::Verdict::Refuse(msg) = verdict {
+                    Box::pin(async move { Err(msg) })
+                } else if known.contains(&c.name.as_str()) {
+                    let warn = match verdict {
+                        loop_guard::Verdict::Warn(m) => Some(m),
+                        _ => None,
+                    };
+                    let f = self.tools.call(c.clone());
+                    Box::pin(async move {
+                        match (f.await, warn) {
+                            (Ok(out), Some(w)) => Ok(format!("{out}\n[{w}]")),
+                            (r, _) => r,
+                        }
+                    })
+                } else {
+                    let msg = format!(
+                        "Unknown tool {}. Available tools: {}",
+                        c.name,
+                        known.join(", ")
+                    );
+                    Box::pin(async move { Err(msg) })
                 };
-                let f = self.tools.call(c.clone());
-                Box::pin(async move {
-                    match (f.await, warn) {
-                        (Ok(out), Some(w)) => Ok(format!("{out}\n[{w}]")),
-                        (r, _) => r,
-                    }
-                })
-            } else {
-                let msg = format!(
-                    "Unknown tool {}. Available tools: {}",
-                    c.name,
-                    known.join(", ")
-                );
-                Box::pin(async move { Err(msg) })
-            };
             handles.push((c, tokio::spawn(fut)));
         }
         let mut out = Vec::new();
