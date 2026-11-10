@@ -10,6 +10,9 @@ pub mod accounts {
     pub const ANTHROPIC: &str = "anthropic-api-key";
     pub const OPENROUTER: &str = "openrouter-api-key";
     pub const RELAY_TOKEN: &str = "relay-token";
+    pub const GITHUB: &str = "github-token";
+    pub const TELEGRAM_API_HASH: &str = "telegram-api-hash";
+    pub const TELEGRAM_SESSION: &str = "telegram-session";
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +37,10 @@ pub trait Platform: Send + Sync {
     fn open_app(&self, name: &str) -> Result<(), PlatformError>;
     /// Deep link to the microphone privacy setting.
     fn open_mic_settings(&self) -> Result<(), PlatformError>;
+    /// Deep link to the Full Disk Access privacy setting (the Mac databases need it).
+    fn open_full_disk_access_settings(&self) -> Result<(), PlatformError>;
+    /// False when macOS refuses Markon a protected file. A rebuild of the app can drop the grant.
+    fn has_full_disk_access(&self) -> bool;
     /// True while the user is likely in a call or sharing the screen (scheduled agents stay quiet).
     fn in_call_or_sharing(&self) -> bool;
     /// Control the Spotify app and report what it is playing.
@@ -120,6 +127,39 @@ pub fn is_safe_app_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_alphanumeric() || " .-_&".contains(c))
+}
+
+/// The Mac's own databases that sources read, read-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacDb {
+    Messages,
+    Calendar,
+    Notes,
+}
+
+pub fn home() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
+}
+
+pub fn mac_db(home: &std::path::Path, db: MacDb) -> PathBuf {
+    let lib = home.join("Library");
+    match db {
+        MacDb::Messages => lib.join("Messages/chat.db"),
+        MacDb::Calendar => lib.join("Group Containers/group.com.apple.calendar/Calendar.sqlitedb"),
+        MacDb::Notes => lib.join("Group Containers/group.com.apple.notes/NoteStore.sqlite"),
+    }
+}
+
+/// Every Contacts database: the local one and one per synced account. Listing the folder needs
+/// Full Disk Access too, so a missing grant gives an empty list.
+pub fn contacts_dbs(home: &std::path::Path) -> Vec<PathBuf> {
+    let root = home.join("Library/Application Support/AddressBook");
+    let mut v = vec![root.join("AddressBook-v22.abcddb")];
+    if let Ok(rd) = std::fs::read_dir(root.join("Sources")) {
+        v.extend(rd.flatten().map(|e| e.path().join("AddressBook-v22.abcddb")));
+    }
+    v.retain(|p| p.exists());
+    v
 }
 
 pub fn current() -> impl Platform {
@@ -228,6 +268,16 @@ impl Platform for MacOs {
         run_open(&["x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"])
     }
 
+    fn open_full_disk_access_settings(&self) -> Result<(), PlatformError> {
+        run_open(&["x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
+    }
+
+    fn has_full_disk_access(&self) -> bool {
+        // Opening (not reading) the privacy database is the usual probe: only Full Disk Access allows it.
+        let tcc = home().join("Library/Application Support/com.apple.TCC/TCC.db");
+        !matches!(std::fs::File::open(tcc), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied)
+    }
+
     fn spotify(&self, cmd: SpotifyCommand<'_>) -> Result<NowPlaying, PlatformError> {
         if !std::path::Path::new("/Applications/Spotify.app").exists() {
             return Err(PlatformError::Open("Spotify is not installed".into()));
@@ -321,6 +371,14 @@ mod tests {
         assert_eq!(n.position_s, 12.5);
         assert_eq!(n.duration_s, 200.25);
         assert_eq!(parse_now_playing("\n\n\n\nstopped\n0\n0").state, "stopped");
+    }
+
+    #[test]
+    fn mac_databases_live_under_the_users_library() {
+        let h = std::path::Path::new("/Users/x");
+        assert_eq!(mac_db(h, MacDb::Messages), std::path::Path::new("/Users/x/Library/Messages/chat.db"));
+        assert!(mac_db(h, MacDb::Notes).ends_with("group.com.apple.notes/NoteStore.sqlite"));
+        assert!(contacts_dbs(std::path::Path::new("/nonexistent")).is_empty());
     }
 
     #[test]
