@@ -132,6 +132,26 @@ async fn parallel_tool_calls_return_results_in_call_order() {
 }
 
 #[tokio::test]
+async fn text_from_separate_rounds_is_spaced_like_sentences() {
+    let mut first = FakeProvider::text("One moment.");
+    let tail = first.split_off(first.len() - 1); // the round's Stop
+    first.extend(FakeProvider::tools(&[("t1", "fast", json!({}))]));
+    drop(tail);
+    let (a, _, mut rx) = agent(vec![first, FakeProvider::text("It's sunny.")]);
+    a.submit(UserTurn::text("weather")).await;
+    let ev = drain(&mut rx).await;
+    assert_eq!(finished(&ev).text, "One moment. It's sunny.");
+    let spoken: String = ev
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(spoken, "One moment. It's sunny.");
+}
+
+#[tokio::test]
 async fn a_failing_or_unknown_tool_is_a_model_visible_error_and_the_loop_continues() {
     let (a, fake, mut rx) = agent(vec![
         FakeProvider::tools(&[("t1", "boom", json!({})), ("t2", "nope", json!({}))]),

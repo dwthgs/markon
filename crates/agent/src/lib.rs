@@ -471,6 +471,7 @@ impl Agent {
         let mut blocks = Vec::new();
         let mut calls = Vec::new();
         let mut stop = None;
+        let mut fresh = true;
         loop {
             let d = tokio::select! {
                 d = rx.recv() => d,
@@ -478,7 +479,15 @@ impl Agent {
             };
             match d {
                 None => break,
-                Some(Ok(ChatDelta::Text(t))) => {
+                Some(Ok(ChatDelta::Text(mut t))) => {
+                    // A round's text follows the previous round's with no separator ("now.In").
+                    if std::mem::take(&mut fresh)
+                        && !text.is_empty()
+                        && !text.ends_with(char::is_whitespace)
+                        && !t.starts_with(char::is_whitespace)
+                    {
+                        t.insert(0, ' ');
+                    }
                     text.push_str(&t);
                     self.emit(AgentEvent::TextDelta { turn_id, text: t });
                 }
