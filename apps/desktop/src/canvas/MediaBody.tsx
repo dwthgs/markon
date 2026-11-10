@@ -1,6 +1,7 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { call, inTauri } from '@/lib/tauri';
+import { cn } from '@/lib/utils';
 import type { Card } from './types';
 import { MEDIA_EVENT, picked } from './useCards';
 
@@ -141,32 +142,36 @@ function Spotify({ card }: { card: Card }) {
   const playing = np.state === 'playing';
   const pct = np.duration_s ? Math.min(100, (np.position_s / np.duration_s) * 100) : 0;
   return (
-    <div className="relative flex h-full items-center gap-3 overflow-hidden">
+    <div className="relative flex h-full">
+      {/* The cover's colours tint the whole card. */}
       {np.artwork ? (
         <img
           src={np.artwork}
           alt=""
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover opacity-20 blur-2xl"
+          className="pointer-events-none absolute inset-0 h-full w-full scale-150 object-cover opacity-40 blur-3xl saturate-150"
         />
       ) : null}
+      <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-r from-black/30 to-[#040a10]/80" />
       {np.artwork ? (
         <img
           src={np.artwork}
           alt=""
-          className="relative aspect-square h-full max-h-24 shrink-0 object-cover shadow-[0_0_18px_rgba(0,0,0,.6)]"
+          className="relative aspect-square h-full shrink-0 object-cover"
           draggable={false}
         />
       ) : null}
-      <div className="relative flex min-w-0 flex-1 flex-col gap-1.5">
+      <div className="relative flex min-w-0 flex-1 flex-col justify-between py-3.5 pr-4 pl-4">
         <div className="min-w-0">
-          <p className="truncate text-[14px] text-white">{np.track || 'Nothing playing'}</p>
-          <p className="truncate text-white/55">{np.artist}</p>
+          <p className="pr-6 text-[9px] tracking-[.2em] whitespace-nowrap text-primary/80">
+            {playing ? 'NOW PLAYING' : 'PAUSED'}
+          </p>
+          <p className="mt-1.5 truncate font-sans text-[20px] leading-tight font-semibold text-white">
+            {np.track || 'Nothing playing'}
+          </p>
+          <p className="truncate font-sans text-[14px] text-white/60">{np.artist}</p>
         </div>
-        <div className="h-0.5 bg-white/10" aria-hidden="true">
-          <div className="h-full bg-primary shadow-[0_0_6px_var(--primary)]" style={{ width: `${pct}%` }} />
-        </div>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="-ml-1.5 flex items-center">
             <IconButton label="Previous track" onClick={() => act('previous')} d={PREV} />
             <IconButton
@@ -177,10 +182,13 @@ function Spotify({ card }: { card: Card }) {
             />
             <IconButton label="Next track" onClick={() => act('next')} d={NEXT} />
           </div>
-          <span className="text-[10px] tabular-nums text-white/40">
-            {clock(np.position_s)} / {clock(np.duration_s)}
+          <span className="text-[10px] whitespace-nowrap tabular-nums text-white/45">
+            {clock(np.position_s)}
           </span>
         </div>
+      </div>
+      <div className="absolute inset-x-0 bottom-0 h-[2px] bg-white/10" aria-hidden="true">
+        <div className="h-full bg-primary shadow-[0_0_8px_var(--primary)]" style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
@@ -207,14 +215,12 @@ function IconButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="grid place-items-center rounded-full p-1.5 text-white/70 transition-colors hover:text-white focus-visible:text-white focus-visible:outline focus-visible:outline-primary"
+      className={cn(
+        'grid place-items-center rounded-full transition focus-visible:outline focus-visible:outline-primary',
+        big ? 'size-9 bg-white text-[#040a10] hover:scale-105' : 'size-8 text-white/70 hover:text-white',
+      )}
     >
-      <svg
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-        className={big ? 'size-5 text-white' : 'size-4'}
-        fill="currentColor"
-      >
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="size-4" fill="currentColor">
         <path d={d} />
       </svg>
     </button>

@@ -128,6 +128,8 @@ export function CardView({
     return () => clearTimeout(t);
   }, [card.updated_ms]);
   const label = `${KIND[card.kind]}: ${card.title}`;
+  // The music card is the player itself: no HUD header, the cover runs edge to edge.
+  const bare = card.kind === 'music' && card.status === 'done';
   return (
     <article
       ref={focusRef}
@@ -138,17 +140,23 @@ export function CardView({
       data-big={big}
       style={{ height: big ? CARD_H * 2 + GAP : CARD_H }}
       className={cn(
-        'card-enter flex flex-col border bg-[#040a10]/95 px-3 py-2 font-mono text-[11px] text-white/70 outline-none transition-[border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-primary',
+        'card-enter relative flex flex-col overflow-hidden border bg-[#040a10]/95 font-mono text-[11px] text-white/70 outline-none transition-[border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-primary',
         card.kind === 'agent'
           ? 'border-primary/90 shadow-[0_0_22px_rgba(0,210,235,.35)]'
           : 'border-primary/50 shadow-[0_0_12px_rgba(0,210,235,.18)]',
+        bare ? 'p-0' : 'px-3 py-2',
         card.status === 'blocked' && 'border-amber-400/70',
         card.status === 'error' && 'border-red-400/60',
         updated && 'border-white shadow-[0_0_22px_rgba(255,255,255,.35)]',
       )}
     >
-      <header className="mb-1.5 flex items-center justify-between gap-2 text-[10px] tracking-[.14em] text-white/55">
-        <span>{`${KIND[card.kind].toUpperCase()} // ${card.status.toUpperCase()}`}</span>
+      <header
+        className={cn(
+          'mb-1.5 flex items-center justify-between gap-2 text-[10px] tracking-[.14em] text-white/55',
+          bare && 'absolute top-2 right-3 z-10 mb-0',
+        )}
+      >
+        {bare ? null : <span>{`${KIND[card.kind].toUpperCase()} // ${card.status.toUpperCase()}`}</span>}
         <button
           type="button"
           aria-label={`Close ${card.title}`}
@@ -161,12 +169,15 @@ export function CardView({
       <h3
         className={cn(
           'mb-1.5 truncate font-heading text-[12px] tracking-wide text-white normal-case',
-          card.kind === 'music' && 'sr-only',
+          bare && 'sr-only',
         )}
       >
         {card.title}
       </h3>
-      <div data-testid="card-body" className="min-h-0 flex-1 overflow-y-auto select-text">
+      <div
+        data-testid="card-body"
+        className={cn('min-h-0 flex-1 select-text', bare ? 'overflow-hidden' : 'overflow-y-auto')}
+      >
         <Body card={card} />
       </div>
     </article>
