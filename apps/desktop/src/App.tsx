@@ -114,6 +114,7 @@ export function App() {
     history,
     settings,
     deny: () => answer(false),
+    busy: false,
   });
   escState.current = {
     quitting,
@@ -123,6 +124,7 @@ export function App() {
     history,
     settings,
     deny: () => answer(false),
+    busy: view.state === 'thinking' || view.state === 'speaking',
   };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -133,6 +135,8 @@ export function App() {
       if (s.quitting) return setQuitting(false);
       if (s.history) return setHistory(false);
       if (s.settings) return setSettings(false);
+      // Then it stops a reply that is thinking or speaking.
+      if (s.busy) return void call('cancel');
       // Esc clears the canvas when it has cards, otherwise hides to the tray.
       if (s.cards) s.clearAll();
       else void call('hide_window');
@@ -165,6 +169,16 @@ export function App() {
       >
         {LABEL[view.state]}
       </div>
+      {view.state === 'thinking' || view.state === 'speaking' ? (
+        <button
+          type="button"
+          onClick={() => void call('cancel')}
+          className="hud-btn absolute left-1/2 z-20 -translate-x-1/2 py-0.5 text-[10px]"
+          style={{ top: `calc(50% + ${size / 2 - size * 0.06}px + 26px)` }}
+        >
+          Stop <span className="text-white/40">Esc</span>
+        </button>
+      ) : null}
       <DuckContext value={view.state !== 'idle'}>
         <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} />
       </DuckContext>

@@ -102,10 +102,7 @@ fn persona(voice: Voice) -> String {
 /// Let the window load exactly the local file a picture or media card shows, and nothing else
 /// (the asset protocol's scope starts empty).
 fn allow_media(app: &AppHandle, body: &serde_json::Value) {
-    let media = matches!(
-        body["kind"].as_str(),
-        Some("image" | "audio" | "video")
-    );
+    let media = matches!(body["kind"].as_str(), Some("image" | "audio" | "video"));
     if let (true, Some(p)) = (media, body["path"].as_str()) {
         let _ = app.asset_protocol_scope().allow_file(p);
     }
@@ -489,7 +486,9 @@ impl Core {
             }
             AudioEvent::Wake { rest } => {
                 let c = self.clone();
-                if rest.split_whitespace().count() >= 2 {
+                if crate::ptt::is_stop(rest) {
+                    self.stop();
+                } else if rest.split_whitespace().count() >= 2 {
                     // "Hey Markon, what's the weather": the request came in the same breath.
                     let text = rest.clone();
                     tauri::async_runtime::spawn(async move {
@@ -526,6 +525,15 @@ impl Core {
                 self.ptt_act(action);
             }
             _ => {}
+        }
+    }
+
+    /// Stop whatever Markon is doing: speech, the running reply, and a "thinking" with nothing behind it.
+    pub fn stop(&self) {
+        self.audio.cancel_speech();
+        self.agent.cancel();
+        if !self.audio.is_listening() {
+            self.agent.set_state(AgentState::Idle);
         }
     }
 

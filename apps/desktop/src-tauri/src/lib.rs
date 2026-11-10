@@ -63,8 +63,7 @@ async fn submit_text(core: State<'_, CoreState>, text: String) -> Result<(), Str
 
 #[tauri::command]
 fn cancel(core: State<'_, CoreState>) {
-    core.audio.cancel_speech();
-    core.agent.cancel();
+    core.stop();
 }
 
 #[tauri::command]
@@ -95,8 +94,10 @@ async fn spotify_control(action: String) -> Result<serde_json::Value, String> {
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"kind": "music", "track": np.track, "artist": np.artist, "album": np.album,
-        "artwork": np.artwork, "state": np.state, "position_s": np.position_s, "duration_s": np.duration_s}))
+    Ok(
+        serde_json::json!({"kind": "music", "track": np.track, "artist": np.artist, "album": np.album,
+        "artwork": np.artwork, "state": np.state, "position_s": np.position_s, "duration_s": np.duration_s}),
+    )
 }
 
 #[tauri::command]

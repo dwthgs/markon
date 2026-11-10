@@ -205,3 +205,15 @@ test('24 cards keep the frame rate up', async ({ page }) => {
   console.log(`24 cards: ${fps.toFixed(1)} fps (headless Chromium)`);
   expect(fps).toBeGreaterThanOrEqual(50);
 });
+
+test('while thinking, a Stop button and Esc cancel the reply', async ({ page }) => {
+  await open(page);
+  await expect(page.getByRole('button', { name: /stop/i })).toBeHidden();
+  await emit(page, 'markon://agent', { type: 'state_changed', data: 'thinking' });
+  await page.getByRole('button', { name: /stop/i }).click();
+  expect(await calls(page, 'cancel')).toHaveLength(1);
+  await emit(page, 'markon://agent', { type: 'state_changed', data: 'speaking' });
+  await page.keyboard.press('Escape');
+  expect(await calls(page, 'cancel')).toHaveLength(2);
+  expect(await calls(page, 'hide_window')).toHaveLength(0);
+});

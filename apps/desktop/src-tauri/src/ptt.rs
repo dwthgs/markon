@@ -10,6 +10,31 @@ pub const FOLLOW_UP: Duration = Duration::from_secs(6);
 /// Wait this long after playback ends before listening, so the room's echo of Markon is gone.
 pub const ECHO_TAIL: Duration = Duration::from_millis(300);
 
+/// "Hey Markon, stop": words that end what Markon is doing instead of starting a request.
+pub fn is_stop(text: &str) -> bool {
+    let t: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
+    matches!(
+        t.split_whitespace().collect::<Vec<_>>().join(" ").as_str(),
+        "stop"
+            | "stop it"
+            | "stop that"
+            | "cancel"
+            | "cancel that"
+            | "never mind"
+            | "nevermind"
+            | "enough"
+            | "quiet"
+            | "be quiet"
+            | "shut up"
+            | "hold on"
+            | "wait"
+    )
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     /// Start listening (a new session).
@@ -258,5 +283,14 @@ mod tests {
         );
         assert!(p.by_key());
         assert_eq!(p.window_left(t), None);
+    }
+
+    #[test]
+    fn stop_words_stop_and_requests_do_not() {
+        assert!(is_stop("Stop."));
+        assert!(is_stop("never mind"));
+        assert!(is_stop("Cancel that!"));
+        assert!(!is_stop("stop the music on Spotify"));
+        assert!(!is_stop(""));
     }
 }
