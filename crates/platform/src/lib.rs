@@ -237,6 +237,22 @@ fn osascript(script: &str, args: &[&str], what: &str) -> Result<(), PlatformErro
     }))
 }
 
+/// Installed memory in GB, for picking a local model that fits.
+pub fn total_memory_gb() -> f64 {
+    std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<f64>()
+                .ok()
+        })
+        .map(|b| b / 1_073_741_824.0)
+        .unwrap_or(8.0)
+}
+
 pub fn current() -> impl Platform {
     MacOs::default()
 }
