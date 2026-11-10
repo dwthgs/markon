@@ -3,6 +3,17 @@ use audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
 
 pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
+    // A NaN or infinity (Kokoro can emit them) makes the FFT panic, which killed the speaker thread.
+    let clean: Vec<f32>;
+    let input = if input.iter().all(|x| x.is_finite()) {
+        input
+    } else {
+        clean = input
+            .iter()
+            .map(|x| if x.is_finite() { *x } else { 0.0 })
+            .collect();
+        &clean
+    };
     if from == to || input.is_empty() {
         return input.to_vec();
     }
@@ -35,6 +46,17 @@ pub fn downmix(data: &[f32], channels: usize) -> impl Iterator<Item = f32> + '_ 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn survives_nan_and_infinity() {
+        let mut v = vec![0.1f32; 24_000];
+        v[100] = f32::NAN;
+        v[200] = f32::INFINITY;
+        let out = resample(&v, 24_000, 48_000);
+        assert!(out.len() > 40_000);
+        assert!(out.iter().all(|x| x.is_finite()));
+        assert!(resample(&v, 16_000, 16_000).iter().all(|x| x.is_finite()));
+    }
 
     #[test]
     fn keeps_duration_and_pitch() {
