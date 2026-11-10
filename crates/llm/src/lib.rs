@@ -2,6 +2,8 @@
 //! `models/manifest.json` and loaded with llama.cpp (`llama-cpp-2`), the way `whisper-rs` runs speech.
 //! Qwen2.5 Instruct's own chat and tool format: tools in `<tools>`, calls in `<tool_call>`, results in
 //! `<tool_response>`. Experimental.
+pub mod embed;
+
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
