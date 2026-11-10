@@ -306,6 +306,17 @@ impl Memory {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// The newest facts that are still current: what Markon knows about the user, whatever the question.
+    pub fn latest_facts(&self, k: usize) -> Result<Vec<Fact>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT id, subject, statement, confidence, created_at, superseded_by
+             FROM facts WHERE superseded_by IS NULL ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = st.query_map([k as i64], Self::fact_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn forget(&self, id: i64) -> Result<bool> {
         // Derived facts go with it (ON DELETE CASCADE on derived_from).
         Ok(self.db().execute("DELETE FROM facts WHERE id=?1", [id])? > 0)

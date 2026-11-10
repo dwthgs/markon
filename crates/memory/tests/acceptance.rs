@@ -219,3 +219,35 @@ fn export_and_full_wipe() {
     assert!(m.export().unwrap()["facts"].as_array().unwrap().is_empty());
     assert!(m.conversations(10).unwrap().is_empty());
 }
+
+#[test]
+fn the_newest_current_facts_come_first_and_superseded_ones_are_left_out() {
+    let m = mem();
+    let c = m.start_conversation(Source::Voice).unwrap();
+    let t = m.add_turn(c, "user", "x", 0, 0, "fake", "fake").unwrap();
+    m.add_fact(
+        "name",
+        "The user's name is Dev",
+        t,
+        1.0,
+        FactOrigin::UserStated,
+    )
+    .unwrap();
+    m.add_fact("home", "Lives in Nairobi", t, 1.0, FactOrigin::UserStated)
+        .unwrap();
+    m.add_fact(
+        "home",
+        "Lives in Addis Ababa",
+        t,
+        1.0,
+        FactOrigin::UserStated,
+    )
+    .unwrap();
+    let got: Vec<String> = m
+        .latest_facts(5)
+        .unwrap()
+        .into_iter()
+        .map(|f| f.statement)
+        .collect();
+    assert_eq!(got, ["Lives in Addis Ababa", "The user's name is Dev"]);
+}
