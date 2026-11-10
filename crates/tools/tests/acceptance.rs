@@ -63,6 +63,7 @@ fn call(name: &str, input: serde_json::Value) -> ToolCall {
         name: name.into(),
         input,
         turn_id: 1,
+        tainted: false,
     }
 }
 
@@ -232,7 +233,10 @@ async fn pages_on_this_mac_or_its_network_are_refused() {
         "http://192.168.1.1/",
         "http://[::1]/",
     ] {
-        let err = s.rt.call(call("fetch_page", json!({"url": url}))).await.unwrap_err();
+        let err =
+            s.rt.call(call("fetch_page", json!({"url": url})))
+                .await
+                .unwrap_err();
         assert!(err.contains("does not fetch"), "{url}: {err}");
     }
 }
@@ -253,7 +257,10 @@ async fn a_redirect_to_a_private_address_is_refused() {
     });
     // The first hop is the local mock (allowed by the test hook); the redirect itself is checked.
     s.rt.allow_private_hosts = true;
-    let err = s.rt.fetch_with_timeout(&format!("http://{addr}/"), Duration::from_secs(5)).await.unwrap_err();
+    let err =
+        s.rt.fetch_with_timeout(&format!("http://{addr}/"), Duration::from_secs(5))
+            .await
+            .unwrap_err();
     assert!(err.contains("private") || err.contains("redirect"), "{err}");
 }
 
@@ -262,14 +269,23 @@ async fn secret_files_are_never_read_even_in_an_approved_folder() {
     let s = setup("secrets", vec![]);
     std::fs::write(s.dir.join(".env"), "ANTHROPIC_API_KEY=sk-ant-x").unwrap();
     std::fs::create_dir_all(s.dir.join(".ssh")).unwrap();
-    std::fs::write(s.dir.join(".ssh/id_ed25519"), "-----BEGIN OPENSSH PRIVATE KEY-----").unwrap();
+    std::fs::write(
+        s.dir.join(".ssh/id_ed25519"),
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+    )
+    .unwrap();
     for p in [".env", ".ssh/id_ed25519"] {
         let path = s.dir.join(p);
-        let err = s.rt.call(call("read_file", json!({"path": path}))).await.unwrap_err();
+        let err =
+            s.rt.call(call("read_file", json!({"path": path})))
+                .await
+                .unwrap_err();
         assert!(err.contains("holds secrets"), "{p}: {err}");
     }
     std::fs::write(s.dir.join("notes.txt"), "fine").unwrap();
-    let ok = s.rt.call(call("read_file", json!({"path": s.dir.join("notes.txt")}))).await;
+    let ok =
+        s.rt.call(call("read_file", json!({"path": s.dir.join("notes.txt")})))
+            .await;
     assert_eq!(ok.unwrap(), "fine");
 }
 

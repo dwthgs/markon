@@ -1,5 +1,7 @@
 //! Permission tiers: read inside approved folders, write asks once per folder,
 //! execute asks every time and shows the exact command. Denials are remembered.
+//! Send asks every time with the exact text; "always yes" per recipient is remembered
+//! only when the user picks it, and never applies once the conversation has read outside content.
 use crate::BoxFuture;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -12,14 +14,19 @@ pub enum Tier {
     Read,
     Write,
     Execute,
+    /// Reaches another person or changes an account: send, reply, archive, add an event.
+    Send,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Request {
     pub tier: Tier,
     pub tool: String,
-    /// The exact path or command the user is asked about.
+    /// The exact path, command or message the user is asked about.
     pub detail: String,
+    /// For a send: who it goes to, offered as "always yes for <pattern>" when `always_ok`.
+    pub pattern: Option<String>,
+    pub always_ok: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -27,6 +34,31 @@ pub struct Request {
 pub enum Decision {
     Allow,
     Deny,
+    /// Allow, and stop asking for this tool and recipient (sends only).
+    Always,
+}
+
+/// Remembered "always yes" answers (the memory database in the app).
+pub trait ApprovalStore: Send + Sync {
+    fn allowed(&self, tool: &str, pattern: &str) -> bool;
+    fn allow_always(&self, tool: &str, pattern: &str);
+}
+
+#[derive(Default)]
+pub struct MemoryApprovals(pub Mutex<HashSet<(String, String)>>);
+impl ApprovalStore for MemoryApprovals {
+    fn allowed(&self, tool: &str, pattern: &str) -> bool {
+        self.0
+            .lock()
+            .expect("approvals")
+            .contains(&(tool.to_string(), pattern.to_lowercase()))
+    }
+    fn allow_always(&self, tool: &str, pattern: &str) {
+        self.0
+            .lock()
+            .expect("approvals")
+            .insert((tool.to_string(), pattern.to_lowercase()));
+    }
 }
 
 /// Shows the question to the user (a dialog on the HUD) and returns their answer.
@@ -50,6 +82,7 @@ pub struct Permissions {
     denied: Mutex<HashSet<(Tier, String)>>,
     prompter: Arc<dyn Prompter>,
     audit: Mutex<Vec<AuditEntry>>,
+    pub approvals: RwLock<Arc<dyn ApprovalStore>>,
 }
 
 /// Lexically resolve `.` and `..` without touching the disk, so a missing file still resolves.
@@ -99,6 +132,7 @@ impl Permissions {
             denied: Mutex::new(HashSet::new()),
             prompter,
             audit: Mutex::new(Vec::new()),
+            approvals: RwLock::new(Arc::new(MemoryApprovals::default())),
         }
     }
 
@@ -182,9 +216,11 @@ impl Permissions {
                 tier: Tier::Write,
                 tool: tool.into(),
                 detail: folder.to_string_lossy().into(),
+                pattern: None,
+                always_ok: false,
             })
             .await;
-        let allowed = d == Decision::Allow;
+        let allowed = d != Decision::Deny;
         self.log(Tier::Write, tool, &p.to_string_lossy(), allowed, "asked");
         if allowed {
             self.write_ok.lock().expect("write_ok").insert(folder);
@@ -192,6 +228,54 @@ impl Permissions {
         } else {
             self.denied.lock().expect("denied").insert(key);
             Err(format!("writing in {} was denied", folder.display()))
+        }
+    }
+
+    /// A send: ask every time with the exact text, unless the user said "always yes" for this tool and
+    /// recipient and the conversation has read nothing from outside. `always` is false for actions that
+    /// may never be remembered (archive, calendar changes).
+    pub async fn send(
+        &self,
+        tool: &str,
+        to: &str,
+        detail: &str,
+        tainted: bool,
+        always: bool,
+    ) -> Result<(), String> {
+        let store = self.approvals.read().expect("approvals").clone();
+        if always && !tainted && store.allowed(tool, to) {
+            self.log(
+                Tier::Send,
+                tool,
+                detail,
+                true,
+                "always yes for this recipient",
+            );
+            return Ok(());
+        }
+        let d = self
+            .prompter
+            .ask(Request {
+                tier: Tier::Send,
+                tool: tool.into(),
+                detail: detail.into(),
+                pattern: Some(to.to_string()),
+                always_ok: always && !tainted,
+            })
+            .await;
+        let reason = if tainted {
+            "asked (outside content in this conversation)"
+        } else {
+            "asked"
+        };
+        self.log(Tier::Send, tool, detail, d != Decision::Deny, reason);
+        match d {
+            Decision::Deny => Err("the user said no, so nothing was sent".into()),
+            Decision::Always if always && !tainted => {
+                store.allow_always(tool, to);
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -208,9 +292,11 @@ impl Permissions {
                 tier: Tier::Execute,
                 tool: tool.into(),
                 detail: command.into(),
+                pattern: None,
+                always_ok: false,
             })
             .await;
-        let allowed = d == Decision::Allow;
+        let allowed = d != Decision::Deny;
         self.log(Tier::Execute, tool, command, allowed, "asked");
         if allowed {
             Ok(())
