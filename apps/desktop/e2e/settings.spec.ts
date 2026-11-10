@@ -84,7 +84,7 @@ test('sources start off, and switching one on asks for Full Disk Access when it 
   page,
 }) => {
   const panel = page.getByRole('dialog', { name: 'Settings' });
-  const messages = panel.getByRole('checkbox', { name: 'Messages' });
+  const messages = panel.getByRole('checkbox', { name: 'Messages', exact: true });
   await expect(messages).not.toBeChecked();
   await expect(panel).not.toContainText('need Full Disk Access');
   await messages.click();
@@ -135,4 +135,25 @@ test('remembered always-yes answers are listed and can be forgotten', async ({ p
   await expect(panel).toContainText('send imessage to sara');
   await panel.getByRole('button', { name: /forget every "always yes"/i }).click();
   expect(await calls(page, 'forget_approvals')).toHaveLength(1);
+});
+
+test('the local routes are offered in settings, marked experimental, with models that fit', async ({
+  page,
+}) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await panel
+    .getByRole('radio', { name: /a server on this mac: ollama or lm studio \(experimental\)/i })
+    .click();
+  expect((await calls(page, 'settings_set')).at(-1)).toEqual({ patch: { route: 'local' } });
+  await expect(
+    panel.getByRole('radio', { name: /built into markon, no server \(experimental\)/i }),
+  ).toBeVisible();
+});
+
+test('a source can be kept on this Mac', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await panel.getByRole('checkbox', { name: 'Messages private' }).click();
+  const patch = (await calls(page, 'settings_set')).at(-1) as { patch: { sources: { private: string[] } } };
+  expect(patch.patch.sources.private).toEqual(['imessage']);
+  await expect(panel.getByRole('button', { name: 'Download the built-in model' })).toBeHidden();
 });

@@ -27,6 +27,8 @@ pub struct SourceSettings {
     pub telegram_api_id: Option<i32>,
     /// The send tool on the Slack MCP server (a guess until tested against the real server).
     pub slack_send_tool: Option<String>,
+    /// Sources whose text never goes to the cloud model: summarised on this Mac or left out.
+    pub private: Vec<String>,
 }
 
 /// "Always yes" answers, kept in the memory database.
@@ -169,6 +171,9 @@ pub fn refresh(core: &crate::core::Core) {
     let tg = core.telegram.lock().expect("telegram").clone();
     *core.sources.write().expect("sources") = build(&s, &core.platform, &servers, tg.clone());
     *core.accounts.write().expect("accounts") = accounts(&s, &core.platform, &servers, tg);
+    let settings = core.settings.lock().expect("settings").clone();
+    *core.private.write().expect("private") =
+        crate::core::private_route(&settings, &core.dir.join("models"));
 }
 
 /// "Always yes" answers for settings, and forgetting them.

@@ -9,6 +9,11 @@ pub enum Route {
     Anthropic,
     OpenRouter,
     Relay,
+    /// A model server the user runs (Ollama, LM Studio). Experimental.
+    Local,
+    /// The built-in model, no server. Experimental.
+    #[serde(rename = "builtin")]
+    BuiltIn,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,6 +38,9 @@ pub struct Settings {
     pub sources: crate::sources::SourceSettings,
     /// The watch agent: off by default.
     pub watch: markon_sources::watch::WatchRules,
+    /// The local route's server and model. None picks a model that fits this Mac.
+    pub local_url: String,
+    pub local_model: Option<String>,
 }
 
 impl Default for Settings {
@@ -49,6 +57,8 @@ impl Default for Settings {
             relay_url: String::new(),
             sources: Default::default(),
             watch: Default::default(),
+            local_url: markon_provider::local::OLLAMA.into(),
+            local_model: None,
         }
     }
 }

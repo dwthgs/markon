@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call } from './tauri';
 
-export type Route = 'anthropic' | 'openrouter' | 'relay';
+export type Route = 'anthropic' | 'openrouter' | 'relay' | 'local' | 'builtin';
 export type Voice = 'markon' | 'markan';
 
 export interface SettingsView {
@@ -17,7 +17,10 @@ export interface SettingsView {
     relay_url: string;
     sources: SourceSettings;
     watch: { enabled: boolean; people: string[]; words: string[] };
+    local_url: string;
+    local_model: string | null;
   };
+  local: { ram_gb: number; fit: string[]; model: string; builtin_ready: boolean; builtin_mb: number };
   keys: { anthropic: boolean; openrouter: boolean };
   models: { id: string; name: string }[];
   default_model: string;
@@ -60,6 +63,7 @@ export interface SourceSettings {
   telegram: boolean;
   telegram_api_id: number | null;
   slack_send_tool: string | null;
+  private: string[];
 }
 
 export type Patch = Partial<Omit<SettingsView['settings'], 'device_id' | 'relay_url'>>;
@@ -72,6 +76,20 @@ export const ROUTES: { id: Route; label: string; hint: string }[] = [
     hint: 'A curated list of models, billed to OpenRouter.',
   },
   { id: 'relay', label: 'Free trial', hint: 'A few messages a day through Markon’s relay.' },
+];
+
+/** On this Mac, no cloud. Settings only: onboarding keeps to the hosted routes. */
+export const LOCAL_ROUTES: { id: Route; label: string; hint: string }[] = [
+  {
+    id: 'local',
+    label: 'A server on this Mac: Ollama or LM Studio (experimental)',
+    hint: 'Ollama or LM Studio, which you run yourself.',
+  },
+  {
+    id: 'builtin',
+    label: 'Built into Markon, no server (experimental)',
+    hint: 'Qwen2.5 1.5B inside Markon. No server, no cloud.',
+  },
 ];
 
 export function useSettings() {

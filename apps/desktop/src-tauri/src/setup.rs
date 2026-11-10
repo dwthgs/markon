@@ -19,6 +19,7 @@ pub struct SettingsView {
     usage_today: Vec<markon_memory::Usage>,
     sources: Value,
     automation: Value,
+    local: Value,
     endpoints: Vec<Value>,
     data_dir: String,
 }
@@ -27,7 +28,7 @@ fn account(route: Route) -> Option<&'static str> {
     match route {
         Route::Anthropic => Some(accounts::ANTHROPIC),
         Route::OpenRouter => Some(accounts::OPENROUTER),
-        Route::Relay => None,
+        Route::Relay | Route::Local | Route::BuiltIn => None,
     }
 }
 
@@ -39,6 +40,8 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
     let model_host = match s.route {
         Route::Anthropic => "api.anthropic.com".to_string(),
         Route::OpenRouter => "openrouter.ai".to_string(),
+        Route::Local => format!("{} (this Mac)", s.local_url),
+        Route::BuiltIn => "none: the built-in model runs on this Mac".into(),
         Route::Relay => {
             if s.relay_url.is_empty() {
                 "free-trial relay (not available in this build)".into()
@@ -71,6 +74,7 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
         usage_today: core.memory.usage_today().unwrap_or_default(),
         sources: crate::sources::view(&core),
         automation: automation(&core),
+        local: local(&core, &s),
         endpoints,
         data_dir: core.dir.display().to_string(),
         settings: s,
@@ -88,6 +92,48 @@ pub struct Patch {
     reduced_motion: Option<bool>,
     sources: Option<crate::sources::SourceSettings>,
     watch: Option<markon_sources::watch::WatchRules>,
+    local_url: Option<String>,
+    local_model: Option<Option<String>>,
+}
+
+/// The local routes as settings shows them: this Mac's memory, models that fit, the built-in file.
+fn local(core: &crate::core::Core, s: &Settings) -> Value {
+    let ram = markon_platform::total_memory_gb();
+    let entry = markon_audio::manifest::Manifest::bundled();
+    let builtin = entry.entry(markon_llm::MODEL_ID).ok();
+    json!({
+        "ram_gb": ram.round(),
+        "fit": markon_provider::local::models_that_fit_in(ram),
+        "model": crate::core::local_model(s),
+        "builtin_ready": builtin.is_some_and(|e| core.dir.join("models").join(&e.path).exists()),
+        "builtin_mb": builtin.map(|e| e.size / 1_000_000).unwrap_or(0),
+    })
+}
+
+/// Download the built-in model, checked against its pinned SHA-256. Progress shows in
+/// the status line.
+#[tauri::command]
+pub async fn download_builtin_model(core: State<'_, CoreState>) -> Result<(), String> {
+    let m = markon_audio::manifest::Manifest::bundled();
+    let e = m
+        .entry(markon_llm::MODEL_ID)
+        .map_err(|e| e.to_string())?
+        .clone();
+    let dir = core.dir.join("models");
+    let c = core.inner().clone();
+    let mut last = 0;
+    e.download(&dir, |got, total| {
+        let pct = got * 100 / total.max(1);
+        if pct >= last + 5 {
+            last = pct;
+            c.note_public(format!("Downloading the built-in model ({pct}%)"));
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    core.note_public(String::new());
+    crate::sources::refresh(&core);
+    Ok(())
 }
 
 /// Agent files and skills as settings shows them, with the files that did not parse.
@@ -156,6 +202,22 @@ pub fn settings_set(
     if let Some(w) = patch.watch {
         s.watch = w;
     }
+    let local_changed = patch.local_url.is_some() || patch.local_model.is_some();
+    if let Some(u) = patch.local_url {
+        let u = u.trim().to_string();
+        if !(u.starts_with("http://127.0.0.1")
+            || u.starts_with("http://localhost")
+            || u.starts_with("https://"))
+        {
+            return Err(
+                "a local model server is http://127.0.0.1:<port> or http://localhost:<port>".into(),
+            );
+        }
+        s.local_url = u;
+    }
+    if let Some(m) = patch.local_model {
+        s.local_model = m.filter(|m| !m.trim().is_empty());
+    }
     let sources_changed = patch.sources.is_some();
     if let Some(src) = patch.sources {
         s.sources = src;
@@ -165,7 +227,8 @@ pub fn settings_set(
         .set_provider(crate::core::provider_for(&s, core.platform.clone()));
     core.agent.set_model(s.model.clone());
     *core.settings.lock().expect("settings") = s;
-    if sources_changed {
+    // The private route follows the local settings too.
+    if sources_changed || local_changed || route_changed {
         crate::sources::refresh(&core);
     }
     core.emit_status();

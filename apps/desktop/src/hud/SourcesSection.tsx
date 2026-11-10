@@ -183,6 +183,30 @@ export function SourcesSection({
         </div>
       ) : null}
 
+      <div>
+        <p>Keep on this Mac (summarised by a local model; left out if there is none):</p>
+        {(
+          [
+            ['imessage', 'Messages'],
+            ['telegram', 'Telegram'],
+            ...src.mail.map((a) => [`mail:${a.user}`, `Mail (${a.user})`]),
+          ] as [string, string][]
+        ).map(([id, label]) => (
+          <label key={id} className="mr-4">
+            <input
+              type="checkbox"
+              checked={src.private.includes(id)}
+              onChange={(e) =>
+                void set({
+                  private: e.target.checked ? [...src.private, id] : src.private.filter((x) => x !== id),
+                })
+              }
+            />{' '}
+            {label} private
+          </label>
+        ))}
+      </div>
+
       <TelegramBlock src={src} set={set} attempt={attempt} reload={reload} />
 
       {oauth.length ? (

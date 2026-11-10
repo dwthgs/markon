@@ -21,8 +21,18 @@ export const settingsView = {
       telegram: false,
       telegram_api_id: null,
       slack_send_tool: null,
+      private: [],
     },
     watch: { enabled: false, people: [], words: ['urgent', 'asap', 'emergency'] },
+    local_url: 'http://127.0.0.1:11434',
+    local_model: null,
+  },
+  local: {
+    ram_gb: 32,
+    fit: ['qwen3.5:0.8b', 'qwen3.5:2b', 'qwen3.5:4b', 'qwen3.5:9b', 'qwen3.5:27b', 'qwen3.5:35b'],
+    model: 'qwen3.5:27b',
+    builtin_ready: false,
+    builtin_mb: 1117,
   },
   keys: { anthropic: false, openrouter: false },
   models: [

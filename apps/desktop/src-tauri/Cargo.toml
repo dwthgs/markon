@@ -27,6 +27,7 @@ markon-tools = { path = "../../../crates/tools" }
 markon-memory = { path = "../../../crates/memory" }
 markon-scheduler = { path = "../../../crates/scheduler" }
 markon-sources = { path = "../../../crates/sources" }
+markon-llm = { path = "../../../crates/llm" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [lints]

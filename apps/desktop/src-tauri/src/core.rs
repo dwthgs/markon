@@ -45,6 +45,7 @@ pub struct Core {
     pub telegram: Mutex<Option<Arc<markon_sources::telegram::Telegram>>>,
     pub reminders: Arc<markon_scheduler::reminders::Reminders>,
     pub accounts: Arc<std::sync::RwLock<markon_sources::act::Accounts>>,
+    pub private: Arc<std::sync::RwLock<markon_sources::tool::Private>>,
     pub skills: markon_tools::skills::Library,
     /// The conversation turns and cards are written to (one per session or scheduled run).
     conv: Arc<Mutex<Option<i64>>>,
@@ -114,6 +115,128 @@ fn allow_media(app: &AppHandle, body: &serde_json::Value) {
     }
 }
 
+/// The local route's model: the chosen one, or one that fits this Mac's memory.
+pub fn local_model(settings: &Settings) -> String {
+    settings.local_model.clone().unwrap_or_else(|| {
+        markon_provider::local::default_model_for(markon_platform::total_memory_gb()).to_string()
+    })
+}
+
+/// The built-in model, loaded once per launch in the background (a few seconds), only after its pinned
+/// file checks out. Until then the route says it is loading or what is missing.
+pub fn builtin(models: &std::path::Path) -> Arc<dyn ModelProvider> {
+    let lazy = Arc::new(LazyBuiltIn {
+        models: models.to_path_buf(),
+    });
+    lazy.start();
+    lazy
+}
+
+static LOADED: std::sync::OnceLock<Result<Arc<markon_llm::BuiltIn>, String>> =
+    std::sync::OnceLock::new();
+static LOADING: std::sync::Once = std::sync::Once::new();
+
+struct LazyBuiltIn {
+    models: PathBuf,
+}
+
+impl LazyBuiltIn {
+    fn start(&self) {
+        let models = self.models.clone();
+        LOADING.call_once(|| {
+            std::thread::spawn(move || {
+                let r = Manifest::bundled()
+                    .entry(markon_llm::MODEL_ID)
+                    .map_err(|e| e.to_string())
+                    .and_then(|e| e.verify(&models).map_err(|e| e.to_string()))
+                    .and_then(|p| markon_llm::BuiltIn::load(&p).map_err(|e| e.to_string()))
+                    .map(Arc::new);
+                let _ = LOADED.set(r);
+            });
+        });
+    }
+
+    fn ready(&self) -> Result<Arc<markon_llm::BuiltIn>, String> {
+        match LOADED.get() {
+            Some(Ok(m)) => Ok(m.clone()),
+            Some(Err(e)) => Err(format!(
+                "The built-in model is not ready ({e}). Download it in Settings, Model route."
+            )),
+            None => Err("The built-in model is still loading. Try again in a few seconds.".into()),
+        }
+    }
+}
+
+impl ModelProvider for LazyBuiltIn {
+    fn route(&self) -> &'static str {
+        "builtin"
+    }
+    fn stream(&self, req: markon_provider::ChatRequest) -> markon_provider::DeltaStream {
+        match self.ready() {
+            Ok(m) => m.stream(req),
+            Err(e) => {
+                let (tx, rx) = tokio::sync::mpsc::channel(1);
+                let _ = tx.try_send(Err(markon_provider::ProviderError::Network(e)));
+                rx
+            }
+        }
+    }
+    fn models(&self) -> Vec<markon_provider::ModelInfo> {
+        vec![markon_provider::ModelInfo {
+            id: markon_llm::MODEL_ID.into(),
+            name: "Qwen2.5 1.5B, built in (experimental)".into(),
+        }]
+    }
+    fn default_model(&self) -> String {
+        markon_llm::MODEL_ID.into()
+    }
+    fn validate(
+        &self,
+    ) -> markon_provider::BoxFuture<
+        '_,
+        Result<markon_provider::Account, markon_provider::ProviderError>,
+    > {
+        let r = self.ready().map(|_| ());
+        Box::pin(async move {
+            r.map_err(markon_provider::ProviderError::Network)?;
+            Ok(markon_provider::Account {
+                route: "builtin".into(),
+                plan: Some("on this Mac".into()),
+                balance: None,
+            })
+        })
+    }
+}
+
+/// Who summarises private sources: the built-in model when downloaded, else the local
+/// server when one is chosen, else nobody (private sources are then left out).
+pub fn private_route(
+    settings: &Settings,
+    models: &std::path::Path,
+) -> markon_sources::tool::Private {
+    let ids = settings.sources.private.clone();
+    let ready = Manifest::bundled()
+        .entry(markon_llm::MODEL_ID)
+        .is_ok_and(|e| models.join(&e.path).exists());
+    let summariser: Option<(Arc<dyn ModelProvider>, String)> = if ids.is_empty() {
+        None
+    } else if ready {
+        Some((builtin(models), markon_llm::MODEL_ID.into()))
+    } else if settings.route == Route::Local || settings.local_model.is_some() {
+        let m = local_model(settings);
+        Some((
+            Arc::new(markon_provider::local::LocalServer::new(
+                &settings.local_url,
+                &m,
+            )),
+            m,
+        ))
+    } else {
+        None
+    };
+    markon_sources::tool::Private { ids, summariser }
+}
+
 pub fn provider_for(settings: &Settings, platform: Arc<MacOs>) -> Arc<dyn ModelProvider> {
     let key = |account: &'static str| -> KeySource {
         let p = platform.clone();
@@ -124,6 +247,11 @@ pub fn provider_for(settings: &Settings, platform: Arc<MacOs>) -> Arc<dyn ModelP
         Route::OpenRouter => Arc::new(markon_provider::openrouter::OpenRouter::new(key(
             accounts::OPENROUTER,
         ))),
+        Route::Local => Arc::new(markon_provider::local::LocalServer::new(
+            &settings.local_url,
+            &local_model(settings),
+        )),
+        Route::BuiltIn => builtin(&platform.data_dir().join("models")),
         Route::Relay => {
             let p = platform.clone();
             let store: markon_provider::relay::TokenStore = Arc::new(move |t| {
@@ -248,6 +376,10 @@ impl Core {
             &servers,
             None,
         )));
+        let private = Arc::new(std::sync::RwLock::new(private_route(
+            &settings,
+            &dir.join("models"),
+        )));
         let (mut agent, mut rx) = Agent::new(
             provider,
             Arc::new(crate::remember::WithMemory {
@@ -264,6 +396,7 @@ impl Core {
                         sources: sources.clone(),
                         cards: card_sink.clone(),
                         memory: memory.clone(),
+                        private: private.clone(),
                     },
                     accounts: accounts.clone(),
                     outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
@@ -306,6 +439,7 @@ impl Core {
             telegram: Mutex::new(None),
             reminders,
             accounts,
+            private,
             skills,
             conv,
             turn_card_ids,
@@ -365,7 +499,7 @@ impl Core {
                     .ok()
                     .flatten()
                     .is_some(),
-                Route::Relay => true,
+                Route::Relay | Route::Local | Route::BuiltIn => true,
             },
             voice: s.voice,
             route: s.route,
@@ -379,6 +513,11 @@ impl Core {
 
     pub fn emit_status(&self) {
         let _ = self.app.emit(EV_STATUS, self.status());
+    }
+
+    /// The status line's note, for long work started from settings (the built-in model download).
+    pub fn note_public(&self, n: String) {
+        self.note(n);
     }
 
     fn note(&self, n: impl Into<String>) {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ROUTES, useSettings } from '@/lib/settings';
+import { LOCAL_ROUTES, ROUTES, useSettings } from '@/lib/settings';
 import { call } from '@/lib/tauri';
 import { AutomationSection } from './AutomationSection';
 import { KeyField } from './KeyField';
@@ -73,7 +73,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       </Section>
 
       <Section title="MODEL ROUTE">
-        {ROUTES.map((r) => (
+        {[...ROUTES, ...LOCAL_ROUTES].map((r) => (
           <label key={r.id} className="block">
             <input
               type="radio"
@@ -84,6 +84,59 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             {r.label}
           </label>
         ))}
+        {s.route === 'local' ? (
+          <div className="mt-2">
+            <label className="block">
+              Server
+              <input
+                aria-label="Local server"
+                defaultValue={s.local_url}
+                onBlur={(e) => void attempt(() => save({ local_url: e.target.value }))}
+                className="ml-2 w-56 border border-white/15 bg-transparent px-2 py-0.5"
+              />
+            </label>
+            <label className="mt-1 block">
+              Local model
+              <select
+                aria-label="Local model"
+                value={view.local.model}
+                onChange={(e) => void attempt(() => save({ local_model: e.target.value }))}
+                className="ml-2 border border-white/15 bg-[#04090f] px-1 py-0.5"
+              >
+                {[...new Set([view.local.model, ...view.local.fit])].map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-white/45">
+              Models that fit in this Mac's {view.local.ram_gb} GB. Get one with: ollama pull{' '}
+              {view.local.model}
+            </p>
+          </div>
+        ) : null}
+        {s.route === 'builtin' || s.sources.private.length ? (
+          <p className="mt-2">
+            Built-in model ({view.local.builtin_mb} MB):{' '}
+            {view.local.builtin_ready ? (
+              'downloaded'
+            ) : (
+              <button
+                type="button"
+                className="hud-btn py-0"
+                onClick={() =>
+                  void attempt(async () => {
+                    await call('download_builtin_model');
+                    await reload();
+                  })
+                }
+              >
+                Download the built-in model
+              </button>
+            )}
+          </p>
+        ) : null}
         <label className="mt-2 block">
           Model
           <select
