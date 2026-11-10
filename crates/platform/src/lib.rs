@@ -237,6 +237,12 @@ fn osascript(script: &str, args: &[&str], what: &str) -> Result<(), PlatformErro
     }))
 }
 
+/// The user's Chrome, if installed (the browser tools drive it with its own profile).
+pub fn chrome_path() -> Option<PathBuf> {
+    let p = PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    p.exists().then_some(p)
+}
+
 /// Installed memory in GB, for picking a local model that fits.
 pub fn total_memory_gb() -> f64 {
     std::process::Command::new("/usr/sbin/sysctl")
