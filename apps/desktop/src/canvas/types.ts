@@ -8,7 +8,8 @@ export type CardKind =
   | 'image'
   | 'audio'
   | 'video'
-  | 'music';
+  | 'music'
+  | 'source';
 
 /** Cards that show a picture or play something: they get two slots of height. */
 export const MEDIA: ReadonlySet<CardKind> = new Set(['image', 'audio', 'video', 'music']);

@@ -15,6 +15,7 @@ const ORDER = {
   audio: 1,
   video: 1,
   music: 1,
+  source: 2,
 } as const satisfies Record<CardKind, number>;
 
 /** Markon's pause_media tool, broadcast to the media cards: `{ which, play }` (MediaBody listens). */

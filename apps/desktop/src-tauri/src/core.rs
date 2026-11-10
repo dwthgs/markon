@@ -40,6 +40,9 @@ pub struct Core {
     last_user: Mutex<String>,
     pub memory: Arc<Memory>,
     pub scheduler: Scheduler,
+    /// The switched-on sources, rebuilt when settings change.
+    pub sources: markon_sources::Sources,
+    pub telegram: Mutex<Option<Arc<markon_sources::telegram::Telegram>>>,
     /// The conversation turns and cards are written to (one per session or scheduled run).
     conv: Arc<Mutex<Option<i64>>>,
     /// Card ids per turn, so a cancelled turn leaves none behind.
@@ -222,13 +225,25 @@ impl Core {
             &dir.join("cache"),
             card_sink.clone(),
         );
-        workspace::start_mcp(tools.clone(), &dir.join("mcp.json"));
+        workspace::start_mcp(tools.clone(), &dir.join("mcp.json"), platform.clone());
         let provider = provider_for(&settings, platform.clone());
         let pending_facts = crate::remember::PendingFacts::default();
+        let servers = tools.mcp.read().map(|m| m.clone()).unwrap_or_default();
+        let sources: markon_sources::Sources = Arc::new(std::sync::RwLock::new(crate::sources::build(
+            &settings.sources,
+            &platform,
+            &servers,
+            None,
+        )));
         let (mut agent, mut rx) = Agent::new(
             provider,
             Arc::new(crate::remember::WithMemory {
-                inner: workspace::shared(&tools),
+                inner: markon_sources::tool::WithSources {
+                    inner: workspace::shared(&tools),
+                    sources: sources.clone(),
+                    cards: card_sink.clone(),
+                    memory: memory.clone(),
+                },
                 pending: pending_facts.clone(),
             }),
             AgentConfig {
@@ -260,6 +275,8 @@ impl Core {
             last_user: Mutex::new(String::new()),
             memory,
             scheduler,
+            sources,
+            telegram: Mutex::new(None),
             conv,
             turn_card_ids,
             muted: AtomicBool::new(false),
@@ -288,6 +305,10 @@ impl Core {
             .expect("models thread");
         let c = core.clone();
         tauri::async_runtime::spawn(async move { c.schedule_loop().await });
+        let c = core.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::sources::start_telegram(&c);
+        });
         core
     }
 

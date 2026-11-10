@@ -79,3 +79,32 @@ test('double-clicking the drag strip toggles full screen', async ({ page }) => {
   await page.getByTestId('drag-strip').dblclick({ position: { x: 20, y: 10 } });
   expect(await calls(page, 'toggle_full_screen')).toHaveLength(1);
 });
+
+test('sources start off, and switching one on asks for Full Disk Access when it is missing', async ({
+  page,
+}) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  const messages = panel.getByRole('checkbox', { name: 'Messages' });
+  await expect(messages).not.toBeChecked();
+  await expect(panel).not.toContainText('need Full Disk Access');
+  await messages.click();
+  expect((await calls(page, 'settings_set')).at(-1)).toEqual({
+    patch: { sources: { ...onboarded.settings.sources, imessage: true } },
+  });
+});
+
+test('a mail account is added with its app password going to the keychain', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await panel.getByLabel('Mail server').fill('imap.gmail.com');
+  await panel.getByLabel('Mail address').fill('me@gmail.com');
+  await panel.getByLabel('App password').fill('abcd efgh ijkl mnop');
+  await panel.getByRole('button', { name: 'Add mail account' }).click();
+  expect(await calls(page, 'set_source_secret')).toEqual([
+    { kind: 'mail', user: 'me@gmail.com', host: 'imap.gmail.com', value: 'abcd efgh ijkl mnop' },
+  ]);
+  const patch = (await calls(page, 'settings_set')).at(-1) as { patch: { sources: { mail: unknown[] } } };
+  expect(patch.patch.sources.mail).toEqual([
+    { host: 'imap.gmail.com', port: 993, user: 'me@gmail.com', enabled: true },
+  ]);
+  expect(JSON.stringify(patch)).not.toContain('abcd');
+});

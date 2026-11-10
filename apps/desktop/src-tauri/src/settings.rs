@@ -29,6 +29,8 @@ pub struct Settings {
     pub device_id: Option<String>,
     /// Free-trial relay base URL. Empty until the relay is deployed.
     pub relay_url: String,
+    /// What Markon may read. Everything is off by default.
+    pub sources: crate::sources::SourceSettings,
 }
 
 impl Default for Settings {
@@ -43,6 +45,7 @@ impl Default for Settings {
             reduced_motion: false,
             device_id: None,
             relay_url: String::new(),
+            sources: Default::default(),
         }
     }
 }

@@ -153,12 +153,12 @@ pub fn runtime(
 }
 
 /// Connect every server in `mcp.json` in the background. Failures show on the server's status, not as crashes.
-pub fn start_mcp(rt: Arc<Runtime>, file: &Path) {
+pub fn start_mcp(rt: Arc<Runtime>, file: &Path, platform: Arc<dyn markon_platform::Platform>) {
     let servers: Vec<Arc<McpServer>> = match McpFile::load(file) {
         Ok(f) => f
             .servers
             .iter()
-            .map(|(n, c)| Arc::new(McpServer::from_config(n, c)))
+            .map(|(n, c)| Arc::new(McpServer::from_config(n, c, platform.clone())))
             .collect(),
         Err(e) => {
             eprintln!("[mcp] {e}");

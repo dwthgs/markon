@@ -17,6 +17,7 @@ pub struct SettingsView {
     mcp: Value,
     verified_mcp: Value,
     usage_today: Vec<markon_memory::Usage>,
+    sources: Value,
     endpoints: Vec<Value>,
     data_dir: String,
 }
@@ -67,6 +68,7 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
         mcp: crate::workspace::mcp_status(&core.tools),
         verified_mcp: serde_json::from_str(markon_tools::mcp::VERIFIED).unwrap_or_default(),
         usage_today: core.memory.usage_today().unwrap_or_default(),
+        sources: crate::sources::view(&core),
         endpoints,
         data_dir: core.dir.display().to_string(),
         settings: s,
@@ -82,6 +84,7 @@ pub struct Patch {
     approved_folders: Option<Vec<PathBuf>>,
     onboarded: Option<bool>,
     reduced_motion: Option<bool>,
+    sources: Option<crate::sources::SourceSettings>,
 }
 
 /// Apply and save a change. Takes effect immediately: the next turn uses the new route (no restart).
@@ -127,11 +130,18 @@ pub fn settings_set(
     if let Some(r) = patch.reduced_motion {
         s.reduced_motion = r;
     }
+    let sources_changed = patch.sources.is_some();
+    if let Some(src) = patch.sources {
+        s.sources = src;
+    }
     s.save(&core.dir).map_err(|e| e.to_string())?;
     core.agent
         .set_provider(crate::core::provider_for(&s, core.platform.clone()));
     core.agent.set_model(s.model.clone());
     *core.settings.lock().expect("settings") = s;
+    if sources_changed {
+        crate::sources::refresh(&core);
+    }
     core.emit_status();
     Ok(())
 }

@@ -217,3 +217,25 @@ test('while thinking, a Stop button and Esc cancel the reply', async ({ page }) 
   expect(await calls(page, 'cancel')).toHaveLength(2);
   expect(await calls(page, 'hide_window')).toHaveLength(0);
 });
+test('a source card lists what is new, or offers Full Disk Access when the Mac refused', async ({ page }) => {
+  await open(page);
+  await emit(
+    page,
+    'markon://card',
+    card('s1', 'source', 'Messages', {
+      body: { count: 2, items: [{ who: 'Sara', text: 'Running late', unread: true }] },
+    }),
+  );
+  await expect(page.getByRole('article', { name: 'Source: Messages' })).toContainText('Sara: Running late');
+  await emit(
+    page,
+    'markon://card',
+    card('s2', 'source', 'Notes', {
+      status: 'blocked',
+      body: { reason: 'Markon needs Full Disk Access to read Notes', needs_full_disk_access: true },
+    }),
+  );
+  const notes = page.getByRole('article', { name: 'Source: Notes' });
+  await notes.getByRole('button', { name: 'Open Full Disk Access settings' }).click();
+  expect(await calls(page, 'open_full_disk_access')).toHaveLength(1);
+});

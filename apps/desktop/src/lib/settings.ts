@@ -15,15 +15,36 @@ export interface SettingsView {
     reduced_motion: boolean;
     device_id: string | null;
     relay_url: string;
+    sources: SourceSettings;
   };
   keys: { anthropic: boolean; openrouter: boolean };
   models: { id: string; name: string }[];
   default_model: string;
   mcp: { name: string; status: { state: string } }[];
   verified_mcp: { servers: { id: string; name: string; available: boolean; reason: string }[] };
+  sources: { full_disk_access: boolean; github_token: boolean; mail_passwords: boolean[] };
   usage_today: { provider: string; model: string; tokens_in: number; tokens_out: number }[];
   endpoints: { name: string; host: string; on: boolean; note: string }[];
   data_dir: string;
+}
+
+export interface MailAccount {
+  host: string;
+  port: number;
+  user: string;
+  enabled: boolean;
+}
+
+/** Mirrors `sources::SourceSettings`: everything is off until switched on. */
+export interface SourceSettings {
+  imessage: boolean;
+  calendar: boolean;
+  notes: boolean;
+  github: boolean;
+  mail: MailAccount[];
+  mcp: { server: string; tool: string; args: unknown }[];
+  telegram: boolean;
+  telegram_api_id: number | null;
 }
 
 export type Patch = Partial<Omit<SettingsView['settings'], 'device_id' | 'relay_url'>>;

@@ -4,6 +4,7 @@ mod ptt;
 mod remember;
 mod settings;
 mod setup;
+mod sources;
 mod tray;
 mod voice_commands;
 mod workspace;
@@ -252,6 +253,15 @@ pub fn run() {
             setup::request_mic,
             setup::export_memory,
             setup::wipe_all,
+            sources::open_full_disk_access,
+            sources::set_source_secret,
+            sources::delete_source_secret,
+            sources::mcp_sign_in,
+            sources::telegram_setup,
+            sources::telegram_request_code,
+            sources::telegram_sign_in,
+            sources::telegram_password,
+            sources::telegram_status,
             report_fps
         ])
         .run(tauri::generate_context!())

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { call } from '@/lib/tauri';
 import { cn } from '@/lib/utils';
 import { CARD_H, GAP } from './layout';
 import { MediaBody } from './MediaBody';
@@ -15,6 +16,7 @@ const KIND = {
   audio: 'Audio',
   video: 'Video',
   music: 'Music',
+  source: 'Source',
 } as const;
 
 function elapsed(ms: number) {
@@ -64,9 +66,42 @@ function AgentBody({ card }: { card: Card }) {
   );
 }
 
+function SourceBody({ card }: { card: Card }) {
+  const b = card.body ?? {};
+  if (card.status !== 'done') {
+    return (
+      <>
+        <p className="whitespace-pre-wrap">{b.reason ?? ''}</p>
+        {b.needs_full_disk_access ? (
+          <button type="button" className="hud-btn mt-2" onClick={() => void call('open_full_disk_access')}>
+            Open Full Disk Access settings
+          </button>
+        ) : null}
+      </>
+    );
+  }
+  const items: { who: string; where: string; text: string; unread: boolean }[] = b.items ?? [];
+  return (
+    <>
+      <p className="mb-1 text-[10px] tracking-widest text-white/60">{b.count ?? 0} NEW</p>
+      <ul className="space-y-1">
+        {items.map((i, n) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a source card's items never reorder
+          <li key={n} className={i.unread ? 'text-white/85' : ''}>
+            {i.who ? <span className="text-primary">{i.who}: </span> : null}
+            {i.text}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 function Body({ card }: { card: Card }) {
   const b = card.body ?? {};
   switch (card.kind) {
+    case 'source':
+      return <SourceBody card={card} />;
     case 'agent':
       return <AgentBody card={card} />;
     case 'image':

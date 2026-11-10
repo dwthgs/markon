@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ROUTES, useSettings } from '@/lib/settings';
 import { call } from '@/lib/tauri';
 import { KeyField } from './KeyField';
+import { SourcesSection } from './SourcesSection';
 
 const nf = new Intl.NumberFormat('en-US');
 
@@ -177,6 +178,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         >
           Add folder
         </button>
+      </Section>
+
+      <Section title="SOURCES">
+        <SourcesSection view={view} save={save} reload={reload} attempt={attempt} />
       </Section>
 
       <Section title="INTEGRATIONS">
