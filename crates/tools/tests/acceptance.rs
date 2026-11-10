@@ -351,3 +351,20 @@ async fn pause_media_pauses_without_closing() {
         json!({"command": "pause", "which": "media"})
     );
 }
+
+#[tokio::test]
+async fn every_spotify_call_updates_the_same_card() {
+    // Invalid actions fail before the Spotify app is touched, but still report on the card.
+    let s = setup("spotify", vec![]);
+    for _ in 0..2 {
+        let mut c = call("spotify", json!({"action": "dance"}));
+        c.id = format!("{}-{}", c.id, s.cards.lock().unwrap().len());
+        assert!(s.rt.call(c).await.is_err());
+    }
+    let cards = s.cards.lock().unwrap();
+    assert!(!cards.is_empty());
+    assert!(
+        cards.iter().all(|(_, c)| c.id == "spotify"),
+        "one card, updated in place"
+    );
+}

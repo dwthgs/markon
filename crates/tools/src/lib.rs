@@ -503,16 +503,20 @@ impl Runtime {
             );
             return Ok(done.into());
         }
-        let card = Card::new(
-            format!("tool-{}", c.id),
-            c.turn_id,
-            kind_of(&c.name),
-            title_of(&c),
-        );
-        (self.cards)(
-            card.clone()
-                .with(CardStatus::Running, json!({"tool": c.name})),
-        );
+        // There is one Spotify app, so one Spotify card: every call updates it in place.
+        let spotify = c.name == "spotify";
+        let id = if spotify {
+            "spotify".to_string()
+        } else {
+            format!("tool-{}", c.id)
+        };
+        let card = Card::new(id, c.turn_id, kind_of(&c.name), title_of(&c));
+        if !spotify {
+            (self.cards)(
+                card.clone()
+                    .with(CardStatus::Running, json!({"tool": c.name})),
+            );
+        }
         let r = if c.name.contains("__") {
             self.run_mcp(&c).await
         } else {
