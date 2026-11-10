@@ -12,7 +12,8 @@ export type CardKind =
 
 /** Cards that show a picture or play something: they get two slots of height. */
 export const MEDIA: ReadonlySet<CardKind> = new Set(['image', 'audio', 'video', 'music']);
-export type CardStatus = 'running' | 'done' | 'error' | 'blocked';
+/** `closed` is not shown: it is Markon asking the screen to close cards (`body.which`). */
+export type CardStatus = 'running' | 'done' | 'error' | 'blocked' | 'closed';
 
 /** Mirrors `markon_tools::cards::Card`. */
 export interface Card {

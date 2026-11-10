@@ -8,9 +8,10 @@ interface Props {
   lay: Layout;
   focusId: string | null;
   onOverflowPick: (id: string) => void;
+  onClose: (id: string) => void;
 }
 
-export function Canvas({ cards, lay, focusId, onOverflowPick }: Props) {
+export function Canvas({ cards, lay, focusId, onOverflowPick, onClose }: Props) {
   const byId = new Map(cards.map((c) => [c.id, c]));
   const refs = useRef(new Map<string, HTMLElement>());
   useEffect(() => {
@@ -28,6 +29,7 @@ export function Canvas({ cards, lay, focusId, onOverflowPick }: Props) {
               key={id}
               card={c}
               big={lay.big.has(id)}
+              onClose={() => onClose(id)}
               focusRef={(el) => {
                 if (el) refs.current.set(id, el);
                 else refs.current.delete(id);

@@ -317,3 +317,21 @@ fn stdio_servers_need_their_runtime_on_path() {
         ServerStatus::Starting
     ));
 }
+
+#[tokio::test]
+async fn close_cards_asks_the_screen_to_close_and_shows_no_card_of_its_own() {
+    let s = setup("close", vec![]);
+    let out =
+        s.rt.call(call("close_cards", json!({"which": "Summertime"})))
+            .await
+            .unwrap();
+    assert!(!out.is_empty());
+    let cards = s.cards.lock().unwrap();
+    assert_eq!(
+        cards.len(),
+        1,
+        "one close request, no running/done tool card"
+    );
+    assert_eq!(cards[0].1.status, CardStatus::Closed);
+    assert_eq!(cards[0].1.body["which"], "Summertime");
+}

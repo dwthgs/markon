@@ -70,6 +70,14 @@ pub fn specs() -> Vec<ToolSpec> {
             &["source"],
         ),
         t(
+            "close_cards",
+            "Close cards on Markon's screen when the user asks (\"close it\", \"close the video\", \
+             \"clear the screen\"). Closing a video or audio card stops it. `which` is \"latest\", \
+             \"media\" (every picture, audio, video and music card), \"all\", or words from a card's title.",
+            json!({"which": {"type": "string"}}),
+            &["which"],
+        ),
+        t(
             "spotify",
             "Control the Spotify app and show what is playing on Markon's screen. `action` is play, \
              pause, next, previous or status. To play something specific, pass its open.spotify.com \

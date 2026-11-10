@@ -83,3 +83,43 @@ test('the Spotify card shows the track and its buttons control Spotify', async (
   const actions = (await calls(page, 'spotify_control')).map((a) => (a as { action: string }).action);
   expect(actions).toEqual(expect.arrayContaining(['pause', 'next']));
 });
+
+test('a YouTube video fills its card', async ({ page }) => {
+  await open(page);
+  await emit(page, 'markon://card', card('v', 'video', 'Funny cats', { youtube: 'dQw4w9WgXcQ' }));
+  const body = page.getByRole('article', { name: /video: funny cats/i }).getByTestId('card-body');
+  const frame = page.getByTitle('Funny cats');
+  await expect(frame).toBeVisible();
+  const [b, f] = await Promise.all([body.boundingBox(), frame.boundingBox()]);
+  expect(f?.height).toBeGreaterThan((b?.height ?? 0) - 4);
+});
+
+test('each card has a working close button', async ({ page }) => {
+  await open(page);
+  await emit(page, 'markon://card', card('v', 'video', 'Funny cats', { youtube: 'dQw4w9WgXcQ' }));
+  await emit(page, 'markon://card', card('i', 'image', 'Cat', { path: '/x/cat.jpg' }));
+  await page.getByRole('button', { name: 'Close Funny cats' }).click();
+  await expect(page.getByTitle('Funny cats')).toHaveCount(0);
+  await expect(page.getByRole('article', { name: /picture: cat/i })).toBeVisible();
+});
+
+test('Markon closes cards when asked: by title, media, latest or all', async ({ page }) => {
+  await open(page);
+  const close = (which: string) =>
+    emit(page, 'markon://card', { ...card(`c-${which}`, 'note', 'close', { which }), status: 'closed' });
+  await emit(page, 'markon://card', card('n', 'note', 'Shopping list', { text: 'milk' }));
+  await emit(page, 'markon://card', card('v', 'video', 'Summertime Sadness', { youtube: 'dQw4w9WgXcQ' }));
+  await emit(page, 'markon://card', card('w', 'video', 'Summertime Sadness', { youtube: 'dQw4w9WgXcQ' }));
+  await emit(page, 'markon://card', card('i', 'image', 'Cat', { path: '/x/cat.jpg' }));
+  await close('summertime');
+  await expect(page.getByTitle('Summertime Sadness')).toHaveCount(0);
+  await expect(page.getByRole('article')).toHaveCount(2);
+  await close('media');
+  await expect(page.getByRole('article', { name: /picture: cat/i })).toHaveCount(0);
+  await emit(page, 'markon://card', card('n2', 'note', 'Second note', { text: 'x' }));
+  await close('latest');
+  await expect(page.getByRole('article', { name: /second note/i })).toHaveCount(0);
+  await expect(page.getByRole('article')).toHaveCount(1);
+  await close('all');
+  await expect(page.getByRole('article')).toHaveCount(0);
+});

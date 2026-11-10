@@ -483,6 +483,16 @@ impl ToolRuntime for Shared {
 
 impl Runtime {
     pub async fn call(&self, c: ToolCall) -> Result<String, String> {
+        if c.name == "close_cards" {
+            // A screen action, not work to show: no card of its own.
+            let which = c.input["which"].as_str().unwrap_or("latest").trim();
+            let which = if which.is_empty() { "latest" } else { which };
+            (self.cards)(
+                Card::new(format!("tool-{}", c.id), c.turn_id, CardKind::Note, "close")
+                    .with(CardStatus::Closed, json!({"which": which})),
+            );
+            return Ok("Closed.".into());
+        }
         let card = Card::new(
             format!("tool-{}", c.id),
             c.turn_id,

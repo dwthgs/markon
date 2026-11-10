@@ -111,10 +111,12 @@ export function CardView({
   card,
   big,
   focusRef,
+  onClose,
 }: {
   card: Card;
   big: boolean;
   focusRef?: (el: HTMLElement | null) => void;
+  onClose?: () => void;
 }) {
   const [updated, setUpdated] = useState(false);
   const prev = useRef(card.updated_ms);
@@ -147,9 +149,14 @@ export function CardView({
     >
       <header className="mb-1.5 flex items-center justify-between gap-2 text-[10px] tracking-[.14em] text-white/55">
         <span>{`${KIND[card.kind].toUpperCase()} // ${card.status.toUpperCase()}`}</span>
-        <span aria-hidden="true" className="text-white/30">
-          ▢
-        </span>
+        <button
+          type="button"
+          aria-label={`Close ${card.title}`}
+          onClick={onClose}
+          className="-my-1 -mr-1 px-1.5 py-0.5 text-[12px] text-white/40 hover:text-white focus-visible:text-white"
+        >
+          ✕
+        </button>
       </header>
       <h3 className="mb-1.5 truncate font-heading text-[12px] tracking-wide text-white normal-case">
         {card.title}

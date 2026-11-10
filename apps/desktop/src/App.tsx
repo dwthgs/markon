@@ -31,7 +31,7 @@ export function App() {
   const feed = useRef<FeatureFeed>(null);
   const input = useRef<HTMLInputElement>(null);
   const view = useCore(feed);
-  const { cards, clear, tidy, toFront } = useCards();
+  const { cards, clear, remove, tidy, toFront } = useCards();
   const [quitting, setQuitting] = useState(false);
   const [asks, setAsks] = useState<PermissionAsk[]>([]);
   const [big, setBig] = useState<Set<string>>(new Set());
@@ -180,7 +180,7 @@ export function App() {
         </button>
       ) : null}
       <DuckContext value={view.state !== 'idle'}>
-        <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} />
+        <Canvas cards={cards} lay={lay} focusId={focusId} onOverflowPick={toFront} onClose={remove} />
       </DuckContext>
       {/* drag here to move the window; double-click toggles full screen on this display.
           Sits under the controls and notices so their buttons stay clickable. */}

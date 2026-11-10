@@ -2,7 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useState } from 'react';
 import type { AgentEvent } from '@/lib/core';
 import { inTauri } from '@/lib/tauri';
-import type { Card, CardKind } from './types';
+import { type Card, type CardKind, MEDIA } from './types';
 
 const ORDER = {
   agent: 0,
@@ -17,6 +17,21 @@ const ORDER = {
   music: 1,
 } as const satisfies Record<CardKind, number>;
 
+/** Which cards Markon's `close_cards` tool means: "all", "media", "latest" or words from a title. */
+export function closing(cards: Card[], which: string): Card[] {
+  const w = which.trim().toLowerCase();
+  if (w === 'all') return [];
+  if (w === 'media') return cards.filter((c) => !MEDIA.has(c.kind));
+  const hit = w === 'latest' ? [] : cards.filter((c) => c.title.toLowerCase().includes(w));
+  if (hit.length) return cards.filter((c) => !hit.includes(c));
+  // "Close it": the newest card.
+  const newest = cards.reduce<Card | undefined>(
+    (a, c) => (a && a.updated_ms > c.updated_ms ? a : c),
+    undefined,
+  );
+  return cards.filter((c) => c !== newest);
+}
+
 /** The canvas's cards, kept in arrival order. The core owns them; the UI only shows and arranges them. */
 export function useCards() {
   const [cards, setCards] = useState<Card[]>([]);
@@ -26,6 +41,7 @@ export function useCards() {
     const subs = [
       listen<Card>('markon://card', ({ payload: c }) =>
         setCards((cs) => {
+          if (c.status === 'closed') return closing(cs, String(c.body?.which ?? 'latest'));
           const i = cs.findIndex((x) => x.id === c.id);
           if (i < 0) return [...cs, c];
           const next = cs.slice();
@@ -33,7 +49,9 @@ export function useCards() {
           return next;
         }),
       ),
-      listen<Card[]>('markon://cards-load', ({ payload }) => setCards(payload)),
+      listen<Card[]>('markon://cards-load', ({ payload }) =>
+        setCards(payload.filter((c) => c.status !== 'closed')),
+      ),
       listen<AgentEvent>('markon://agent', ({ payload: e }) => {
         if (e.type === 'turn_cancelled') setCards((cs) => cs.filter((c) => c.turn_id !== e.data.turn_id));
       }),
@@ -44,6 +62,7 @@ export function useCards() {
   }, []);
 
   const clear = useCallback(() => setCards([]), []);
+  const remove = useCallback((id: string) => setCards((cs) => cs.filter((c) => c.id !== id)), []);
   /** Group by turn (newest first), agent and result cards on top, finished agents last. */
   const tidy = useCallback(
     () =>
@@ -63,5 +82,5 @@ export function useCards() {
     (id: string) => setCards((cs) => [...cs.filter((c) => c.id === id), ...cs.filter((c) => c.id !== id)]),
     [],
   );
-  return { cards, clear, tidy, toFront };
+  return { cards, clear, remove, tidy, toFront };
 }

@@ -50,7 +50,7 @@ function Player({ card }: { card: Card }) {
     src,
     controls: true,
     autoPlay: true,
-    className: 'min-h-0 w-full flex-1 bg-black',
+    className: 'block h-full w-full bg-black object-contain',
   };
   return card.kind === 'audio' ? (
     <div className="flex h-full flex-col justify-center">
@@ -80,7 +80,7 @@ function YouTube({ card }: { card: Card }) {
       allow="autoplay; encrypted-media; picture-in-picture"
       allowFullScreen
       referrerPolicy="strict-origin-when-cross-origin"
-      className="min-h-0 w-full flex-1 border-0 bg-black"
+      className="block h-full w-full border-0 bg-black"
     />
   );
 }

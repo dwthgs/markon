@@ -26,6 +26,8 @@ pub enum CardStatus {
     Done,
     Error,
     Blocked,
+    /// Not a card: asks the screen to close cards (`body.which`).
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
