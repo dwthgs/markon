@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ROUTES, useSettings } from '@/lib/settings';
 import { call } from '@/lib/tauri';
+import { AutomationSection } from './AutomationSection';
 import { KeyField } from './KeyField';
 import { SourcesSection } from './SourcesSection';
 
@@ -182,6 +183,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
       <Section title="SOURCES">
         <SourcesSection view={view} save={save} reload={reload} attempt={attempt} />
+      </Section>
+
+      <Section title="AGENTS AND SKILLS">
+        <AutomationSection view={view} save={save} reload={reload} attempt={attempt} />
       </Section>
 
       <Section title="INTEGRATIONS">

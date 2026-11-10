@@ -18,6 +18,7 @@ pub struct SettingsView {
     verified_mcp: Value,
     usage_today: Vec<markon_memory::Usage>,
     sources: Value,
+    automation: Value,
     endpoints: Vec<Value>,
     data_dir: String,
 }
@@ -69,6 +70,7 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
         verified_mcp: serde_json::from_str(markon_tools::mcp::VERIFIED).unwrap_or_default(),
         usage_today: core.memory.usage_today().unwrap_or_default(),
         sources: crate::sources::view(&core),
+        automation: automation(&core),
         endpoints,
         data_dir: core.dir.display().to_string(),
         settings: s,
@@ -85,6 +87,27 @@ pub struct Patch {
     onboarded: Option<bool>,
     reduced_motion: Option<bool>,
     sources: Option<crate::sources::SourceSettings>,
+    watch: Option<markon_sources::watch::WatchRules>,
+}
+
+/// Agent files and skills as settings shows them, with the files that did not parse.
+fn automation(core: &crate::core::Core) -> Value {
+    let (agents, agent_problems) = core.agent_files();
+    let (skills, skill_problems) = core.skills.all();
+    json!({
+        "agents_dir": core.dir.join("agents"),
+        "skills_dir": core.skills.root,
+        "agents": agents.iter().map(|a| json!({"name": a.name, "schedule": a.schedule, "tools": a.tools, "enabled": a.enabled})).collect::<Vec<_>>(),
+        "agent_problems": agent_problems,
+        "skills": skills.iter().map(|s| json!({"name": s.name, "description": s.description, "trust": s.trust})).collect::<Vec<_>>(),
+        "skill_problems": skill_problems,
+    })
+}
+
+/// The user approves an unreviewed skill as it is now.
+#[tauri::command]
+pub fn approve_skill(core: State<'_, CoreState>, name: String) -> Result<(), String> {
+    core.skills.approve(&name)
 }
 
 /// Apply and save a change. Takes effect immediately: the next turn uses the new route (no restart).
@@ -129,6 +152,9 @@ pub fn settings_set(
     }
     if let Some(r) = patch.reduced_motion {
         s.reduced_motion = r;
+    }
+    if let Some(w) = patch.watch {
+        s.watch = w;
     }
     let sources_changed = patch.sources.is_some();
     if let Some(src) = patch.sources {

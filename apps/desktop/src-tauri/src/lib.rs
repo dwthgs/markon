@@ -253,6 +253,7 @@ pub fn run() {
             setup::request_mic,
             setup::export_memory,
             setup::wipe_all,
+            setup::approve_skill,
             sources::open_full_disk_access,
             sources::set_source_secret,
             sources::delete_source_secret,

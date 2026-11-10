@@ -16,12 +16,21 @@ export interface SettingsView {
     device_id: string | null;
     relay_url: string;
     sources: SourceSettings;
+    watch: { enabled: boolean; people: string[]; words: string[] };
   };
   keys: { anthropic: boolean; openrouter: boolean };
   models: { id: string; name: string }[];
   default_model: string;
   mcp: { name: string; status: { state: string } }[];
   verified_mcp: { servers: { id: string; name: string; available: boolean; reason: string }[] };
+  automation: {
+    agents_dir: string;
+    skills_dir: string;
+    agents: { name: string; schedule: string | null; tools: string[]; enabled: boolean }[];
+    agent_problems: string[];
+    skills: { name: string; description: string; trust: 'bundled' | 'yours' | 'unreviewed' }[];
+    skill_problems: string[];
+  };
   sources: { full_disk_access: boolean; github_token: boolean; mail_passwords: boolean[] };
   usage_today: { provider: string; model: string; tokens_in: number; tokens_out: number }[];
   endpoints: { name: string; host: string; on: boolean; note: string }[];

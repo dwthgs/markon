@@ -43,6 +43,8 @@ pub struct Core {
     /// The switched-on sources, rebuilt when settings change.
     pub sources: markon_sources::Sources,
     pub telegram: Mutex<Option<Arc<markon_sources::telegram::Telegram>>>,
+    pub reminders: Arc<markon_scheduler::reminders::Reminders>,
+    pub skills: markon_tools::skills::Library,
     /// The conversation turns and cards are written to (one per session or scheduled run).
     conv: Arc<Mutex<Option<i64>>>,
     /// Card ids per turn, so a cancelled turn leaves none behind.
@@ -235,11 +237,23 @@ impl Core {
             &servers,
             None,
         )));
+        let reminders = Arc::new(markon_scheduler::reminders::Reminders::new(memory.clone()));
+        let skills = markon_tools::skills::Library {
+            root: dir.join("skills"),
+            bundled: markon_tools::skills::BUNDLED,
+        };
         let (mut agent, mut rx) = Agent::new(
             provider,
             Arc::new(crate::remember::WithMemory {
                 inner: markon_sources::tool::WithSources {
-                    inner: workspace::shared(&tools),
+                    inner: markon_tools::skills::WithSkills {
+                        inner: markon_scheduler::reminders::WithReminders {
+                            inner: workspace::shared(&tools),
+                            reminders: reminders.clone(),
+                        },
+                        library: skills.clone(),
+                        perms: tools.perms.clone(),
+                    },
                     sources: sources.clone(),
                     cards: card_sink.clone(),
                     memory: memory.clone(),
@@ -253,14 +267,10 @@ impl Core {
         );
         agent.add_section(Arc::new(StaticSection(persona(voice))));
         agent.add_section(Arc::new(crate::remember::RecallSection(memory.clone())));
+        agent.add_section(Arc::new(markon_tools::skills::CatalogSection(skills.clone())));
         let scheduler = Scheduler::new(memory.clone());
-        if let Err(e) = scheduler.ensure(
-            markon_scheduler::MORNING_BRIEFING,
-            "30 7 * * *",
-            &markon_scheduler::morning_briefing(),
-            chrono::Local::now(),
-        ) {
-            eprintln!("[scheduler] {e}");
+        if let Err(e) = markon_scheduler::files::install_bundled(&dir.join("agents"), markon_scheduler::BUNDLED) {
+            eprintln!("[scheduler] cannot write the bundled agents: {e}");
         }
         let core = Arc::new(Self {
             app: app.clone(),
@@ -277,6 +287,8 @@ impl Core {
             scheduler,
             sources,
             telegram: Mutex::new(None),
+            reminders,
+            skills,
             conv,
             turn_card_ids,
             muted: AtomicBool::new(false),
@@ -814,36 +826,140 @@ impl Core {
         Ok(n)
     }
 
-    /// Every 30 s: run what is due. Missed runs (asleep, app closed) happen once.
+    /// Run one agent turn as its own conversation in History, limited to its own tools.
+    async fn run_agent(&self, name: &str, spec: &markon_scheduler::AgentSpec) {
+        let busy = self.platform.in_call_or_sharing();
+        let Ok(cv) = self.memory.start_conversation(Source::Schedule) else {
+            return;
+        };
+        let _ = self.memory.set_title(cv, name);
+        *self.conv.lock().expect("conv") = Some(cv);
+        if Delivery::for_busy(busy) == Delivery::CardOnly {
+            self.muted.store(true, Ordering::SeqCst);
+        }
+        self.reset_reply();
+        self.turn_done.store(false, Ordering::SeqCst);
+        *self.last_user.lock().expect("last_user") = name.to_string();
+        self.agent
+            .submit(UserTurn::agent(&spec.prompt, spec.tools.clone(), spec.max_rounds))
+            .await;
+        // The next thing the user says starts a fresh conversation.
+        *self.conv.lock().expect("conv") = None;
+    }
+
+    /// Something worth saying now (a reminder, a watched message): a card always, the sentence out
+    /// loud only when Markon is idle and the user is not in a call.
+    fn notify(&self, id: String, title: &str, sentence: &str) {
+        (self.turn_cards_sink())(
+            Card::new(id, 0, CardKind::Note, title.to_string())
+                .with(CardStatus::Done, serde_json::json!({"text": sentence})),
+        );
+        if self.agent.state() == AgentState::Idle && !self.platform.in_call_or_sharing() {
+            self.say(sentence);
+        }
+    }
+
+    /// The agent files, read fresh: problems are kept for settings.
+    pub fn agent_files(&self) -> (Vec<markon_scheduler::files::AgentFile>, Vec<String>) {
+        let (ok, bad) = markon_scheduler::files::load_dir(&self.dir.join("agents"));
+        (ok.into_iter().map(|(_, f)| f).collect(), bad)
+    }
+
+    /// Every 30 s: sync the agent files, run what is due (missed runs happen once), deliver
+    /// reminders. Every five minutes: the watch agent and meeting prep.
     async fn schedule_loop(self: Arc<Self>) {
+        let mut tick: u64 = 0;
         loop {
-            match self.scheduler.take_due(chrono::Local::now()) {
+            let now = chrono::Local::now();
+            let (files, _) = self.agent_files();
+            if let Err(e) = self.scheduler.sync_files(&files, now) {
+                eprintln!("[scheduler] {e}");
+            }
+            match self.scheduler.take_due(now) {
                 Ok(due) => {
                     for s in due {
-                        let busy = self.platform.in_call_or_sharing();
-                        let Ok(cv) = self.scheduler.open_run(&s) else {
-                            continue;
-                        };
-                        *self.conv.lock().expect("conv") = Some(cv);
-                        if Delivery::for_busy(busy) == Delivery::CardOnly {
-                            self.muted.store(true, Ordering::SeqCst);
-                        }
-                        self.reset_reply();
-                        self.turn_done.store(false, Ordering::SeqCst);
-                        *self.last_user.lock().expect("last_user") = s.name.clone();
-                        self.agent
-                            .submit(UserTurn {
-                                text: s.agent.prompt.clone(),
-                                source: markon_agent::TurnSource::Schedule,
-                            })
-                            .await;
-                        // The next thing the user says starts a fresh conversation.
-                        *self.conv.lock().expect("conv") = None;
+                        self.run_agent(&s.name, &s.agent).await;
                     }
                 }
                 Err(e) => eprintln!("[scheduler] {e}"),
             }
+            for r in self.reminders.take_due(now).unwrap_or_default() {
+                self.notify(format!("reminder-{}", r.id), "Reminder", &format!("Reminder: {}", r.text));
+            }
+            if tick.is_multiple_of(10) {
+                self.watch().await;
+                self.meeting_prep(&files).await;
+            }
+            tick += 1;
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    }
+
+    /// The watch agent: one sentence per new item from a watched person or with a watch word.
+    async fn watch(&self) {
+        let rules = self.settings.lock().expect("settings").watch.clone();
+        if !rules.enabled {
+            return;
+        }
+        let list = self.sources.read().map(|s| s.clone()).unwrap_or_default();
+        let since = markon_sources::now_ms() - 3_600_000;
+        let reports = markon_sources::collect(&list, since, std::time::Duration::from_secs(20)).await;
+        let items: Vec<markon_sources::Item> = reports.into_iter().filter_map(|r| r.result.ok()).flatten().collect();
+        let seen: Vec<String> = self
+            .memory
+            .preference("watch.seen")
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let (hits, seen) = markon_sources::watch::important(&items, &rules, &seen);
+        let _ = self.memory.set_preference("watch.seen", &serde_json::json!(seen));
+        for (item, why) in hits.into_iter().take(3) {
+            self.notify(
+                format!("watch-{}-{}", item.source, item.id),
+                &format!("Watch: {why}"),
+                &markon_sources::watch::sentence(&item),
+            );
+        }
+    }
+
+    /// About ten minutes before a meeting with people in it, run the meeting prep agent file once.
+    async fn meeting_prep(&self, files: &[markon_scheduler::files::AgentFile]) {
+        let on = self.settings.lock().expect("settings").sources.calendar;
+        let Some(prep) = files.iter().find(|f| f.name == "Meeting prep" && f.enabled) else {
+            return;
+        };
+        if !on {
+            return;
+        }
+        let db = markon_platform::mac_db(&markon_platform::home(), markon_platform::MacDb::Calendar);
+        let now = markon_sources::now_ms();
+        let Ok(events) = tokio::task::spawn_blocking(move || markon_sources::mac::events(&db, now, now + 15 * 60_000))
+            .await
+            .unwrap_or_else(|e| Err(markon_sources::SourceError::Failed(e.to_string())))
+        else {
+            return;
+        };
+        let done: Vec<String> = self
+            .memory
+            .preference("meeting_prep.done")
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let keyed: Vec<(String, i64, bool)> =
+            events.iter().map(|e| (format!("{}@{}", e.id, e.start_ms), e.start_ms, !e.attendees.is_empty())).collect();
+        let due = markon_scheduler::meeting_prep_due(&keyed, now, &done);
+        let mut done = done;
+        for key in due {
+            let Some(e) = events.iter().find(|e| format!("{}@{}", e.id, e.start_ms) == key) else { continue };
+            let start = markon_scheduler::local(e.start_ms).map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
+            let mut spec = prep.spec();
+            spec.prompt = markon_scheduler::fill(&spec.prompt, &e.title, &start, &e.attendees.join(", "));
+            done.push(key);
+            let keep = done.len().saturating_sub(200);
+            let _ = self.memory.set_preference("meeting_prep.done", &serde_json::json!(done[keep..]));
+            self.run_agent(&format!("Meeting prep: {}", e.title), &spec).await;
         }
     }
 

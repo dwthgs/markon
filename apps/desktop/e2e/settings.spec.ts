@@ -108,3 +108,24 @@ test('a mail account is added with its app password going to the keychain', asyn
   ]);
   expect(JSON.stringify(patch)).not.toContain('abcd');
 });
+
+test('agent files and skills are listed, a broken file says why, an unreviewed skill can be approved', async ({
+  page,
+}) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await expect(panel).toContainText('Morning briefing · 30 7 * * *');
+  await expect(panel).toContainText('unknown field `schedul`');
+  await expect(panel.getByRole('button', { name: 'Approve markon-setup' })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Approve trip-planner' }).click();
+  expect(await calls(page, 'approve_skill')).toEqual([{ name: 'trip-planner' }]);
+});
+
+test('the watch agent starts off and is switched on in settings', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  const box = panel.getByRole('checkbox', { name: /speak up when something important arrives/i });
+  await expect(box).not.toBeChecked();
+  await box.click();
+  expect((await calls(page, 'settings_set')).at(-1)).toEqual({
+    patch: { watch: { enabled: true, people: [], words: ['urgent', 'asap', 'emergency'] } },
+  });
+});

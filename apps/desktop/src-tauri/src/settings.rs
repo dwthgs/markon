@@ -31,6 +31,8 @@ pub struct Settings {
     pub relay_url: String,
     /// What Markon may read. Everything is off by default.
     pub sources: crate::sources::SourceSettings,
+    /// The watch agent: off by default.
+    pub watch: markon_sources::watch::WatchRules,
 }
 
 impl Default for Settings {
@@ -46,6 +48,7 @@ impl Default for Settings {
             device_id: None,
             relay_url: String::new(),
             sources: Default::default(),
+            watch: Default::default(),
         }
     }
 }

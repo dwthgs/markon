@@ -21,6 +21,7 @@ export const settingsView = {
       telegram: false,
       telegram_api_id: null,
     },
+    watch: { enabled: false, people: [], words: ['urgent', 'asap', 'emergency'] },
   },
   keys: { anthropic: false, openrouter: false },
   models: [
@@ -39,6 +40,17 @@ export const settingsView = {
       },
       { id: 'gmail', name: 'Gmail', available: false, reason: 'no verified web-hosted server' },
     ],
+  },
+  automation: {
+    agents_dir: '/Users/me/.markon/agents',
+    skills_dir: '/Users/me/.markon/skills',
+    agents: [{ name: 'Morning briefing', schedule: '30 7 * * *', tools: ['what_did_i_miss'], enabled: true }],
+    agent_problems: ['/Users/me/.markon/agents/broken.toml: unknown field `schedul`'],
+    skills: [
+      { name: 'markon-setup', description: 'How to connect sources.', trust: 'bundled' },
+      { name: 'trip-planner', description: 'Plan a trip.', trust: 'unreviewed' },
+    ],
+    skill_problems: [],
   },
   sources: { full_disk_access: false, github_token: false, mail_passwords: [] },
   usage_today: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1200, tokens_out: 300 }],
