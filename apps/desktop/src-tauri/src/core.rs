@@ -448,16 +448,28 @@ impl Core {
                     && !self.audio.is_listening()
                     && !self.audio.is_speaking() =>
             {
-                self.agent.set_state(AgentState::Idle);
-                if matches!(e, AudioEvent::PlaybackEnded)
-                    && let Some(session) = self.ptt.lock().expect("ptt").follow_up()
-                {
-                    // Off the speaker thread: opening the microphone can take a moment.
-                    let c = self.clone();
-                    tauri::async_runtime::spawn_blocking(move || {
-                        c.start_listening(session, crate::ptt::FOLLOW_UP)
-                    });
-                }
+                let session = matches!(e, AudioEvent::PlaybackEnded)
+                    .then(|| {
+                        let mut p = self.ptt.lock().expect("ptt");
+                        p.open_window(Instant::now(), crate::ptt::FOLLOW_UP);
+                        p.follow_up()
+                    })
+                    .flatten();
+                let Some(session) = session else {
+                    self.agent.set_state(AgentState::Idle);
+                    return;
+                };
+                // Off the speaker thread, and only once the echo of Markon's voice has died away.
+                // No standby in between: it goes straight from speaking to listening.
+                let c = self.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    std::thread::sleep(crate::ptt::ECHO_TAIL);
+                    if c.ptt.lock().expect("ptt").is_current(session) {
+                        c.start_listening(session, crate::ptt::FOLLOW_UP);
+                    } else if c.agent.state() == AgentState::Speaking {
+                        c.agent.set_state(AgentState::Idle);
+                    }
+                });
             }
             AudioEvent::Wake { rest } => {
                 let c = self.clone();
@@ -563,7 +575,10 @@ impl Core {
                 Err(e) => eprintln!("[ptt] transcription task failed: {e}"),
             }
             match text {
-                Ok(Ok(t)) if !t.trim().is_empty() => c.submit(UserTurn::voice(&t)).await,
+                Ok(Ok(t)) if !t.trim().is_empty() => {
+                    c.ptt.lock().expect("ptt").close_window();
+                    c.submit(UserTurn::voice(&t)).await
+                }
                 Ok(Err(e)) => {
                     let _ = c.app.emit(
                         EV_AUDIO,
@@ -574,13 +589,28 @@ impl Core {
                     c.agent.set_state(AgentState::Idle);
                 }
                 _ => {
+                    let (by_key, again) = {
+                        let mut p = c.ptt.lock().expect("ptt");
+                        let left = p.window_left(Instant::now());
+                        (p.by_key(), left.and_then(|l| p.follow_up().map(|s| (s, l))))
+                    };
+                    if let Some((session, left)) = again {
+                        // A noise with no words inside the after-reply window: keep listening.
+                        let c2 = c.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            c2.start_listening(session, left)
+                        });
+                        return;
+                    }
                     c.agent.set_state(AgentState::Idle);
-                    let _ = c.app.emit(
-                        EV_AUDIO,
-                        AudioEvent::Error {
-                            message: "I didn't hear any words. Hold Alt+Space while you talk, or tap it and speak.".into(),
-                        },
-                    );
+                    if by_key {
+                        let _ = c.app.emit(
+                            EV_AUDIO,
+                            AudioEvent::Error {
+                                message: "I didn't hear any words. Hold Alt+Space while you talk, or tap it and speak.".into(),
+                            },
+                        );
+                    }
                 }
             }
         });

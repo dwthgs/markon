@@ -401,7 +401,10 @@ impl Agent {
 
     fn cancelled(&self, turn_id: u64) {
         self.emit(AgentEvent::TurnCancelled { turn_id });
-        self.set_state(AgentState::Idle);
+        // The user interrupted to say something new: the app is already listening, keep it that way.
+        if self.state() != AgentState::Listening {
+            self.set_state(AgentState::Idle);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

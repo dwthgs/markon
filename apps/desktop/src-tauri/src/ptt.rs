@@ -7,6 +7,8 @@ pub const TAP: Duration = Duration::from_millis(350);
 pub const NO_SPEECH: Duration = Duration::from_secs(8);
 /// After Markon speaks, keep listening this long for a reply without the key.
 pub const FOLLOW_UP: Duration = Duration::from_secs(6);
+/// Wait this long after playback ends before listening, so the room's echo of Markon is gone.
+pub const ECHO_TAIL: Duration = Duration::from_millis(300);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -26,6 +28,10 @@ pub struct Ptt {
     heard: bool,
     swallow_release: bool,
     session: u64,
+    /// The current session was started with the key (not by voice or after a reply).
+    by_key: bool,
+    /// After a reply: keep listening hands-free until then, even through noises that hold no words.
+    window_end: Option<Instant>,
 }
 
 impl Ptt {
@@ -42,6 +48,8 @@ impl Ptt {
         }
         self.down_at = Some(now);
         self.heard = false;
+        self.by_key = true;
+        self.window_end = None;
         self.session += 1;
         Action::Listen(self.session)
     }
@@ -68,8 +76,37 @@ impl Ptt {
         }
         self.latched = true;
         self.heard = false;
+        self.by_key = false;
         self.session += 1;
         Some(self.session)
+    }
+
+    /// Listen hands-free for `len` after a reply.
+    pub fn open_window(&mut self, now: Instant, len: Duration) {
+        self.window_end = Some(now + len);
+    }
+
+    pub fn close_window(&mut self) {
+        self.window_end = None;
+    }
+
+    /// Time left in the after-reply window, if this is a hands-free session inside one.
+    pub fn window_left(&self, now: Instant) -> Option<Duration> {
+        if self.by_key {
+            return None;
+        }
+        self.window_end
+            .and_then(|end| end.checked_duration_since(now))
+            .filter(|d| *d >= Duration::from_secs(1))
+    }
+
+    pub fn by_key(&self) -> bool {
+        self.by_key
+    }
+
+    /// `session` is still the open hands-free session (nothing newer replaced it).
+    pub fn is_current(&self, session: u64) -> bool {
+        self.latched && self.session == session
     }
 
     pub fn speech_started(&mut self) {
@@ -190,5 +227,36 @@ mod tests {
         let mut p = Ptt::default();
         p.pressed(Instant::now());
         assert_eq!(p.follow_up(), None);
+    }
+
+    #[test]
+    fn the_after_reply_window_survives_a_wordless_noise() {
+        let mut p = Ptt::default();
+        let t = Instant::now();
+        p.open_window(t, FOLLOW_UP);
+        let s = p.follow_up().unwrap();
+        assert!(p.is_current(s));
+        // The echo of Markon's voice ends the first attempt with no words: time is left.
+        p.speech_started();
+        assert_eq!(p.speech_ended(), Action::Finish);
+        assert!(!p.by_key());
+        let left = p.window_left(t + Duration::from_secs(2)).unwrap();
+        assert_eq!(left, FOLLOW_UP - Duration::from_secs(2));
+        assert_eq!(p.window_left(t + FOLLOW_UP), None, "window over");
+    }
+
+    #[test]
+    fn a_key_press_ends_the_window_and_owns_the_session() {
+        let mut p = Ptt::default();
+        let t = Instant::now();
+        p.open_window(t, FOLLOW_UP);
+        let s = p.follow_up().unwrap();
+        assert!(matches!(p.pressed(t), Action::Listen(_)));
+        assert!(
+            !p.is_current(s),
+            "the press replaced the hands-free session"
+        );
+        assert!(p.by_key());
+        assert_eq!(p.window_left(t), None);
     }
 }

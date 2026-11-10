@@ -288,6 +288,26 @@ async fn a_cancelled_turn_leaves_no_history_and_drops_its_cards() {
 }
 
 #[tokio::test]
+async fn cancelling_after_the_user_interrupted_keeps_listening() {
+    let mut fake = FakeProvider::new(vec![FakeProvider::text("a long answer that is still streaming")]);
+    fake.delay = Duration::from_millis(30);
+    let (a, mut rx) = Agent::new(Arc::new(fake), Arc::new(Tools), AgentConfig::default());
+    let a = Arc::new(a);
+    let a2 = a.clone();
+    let h = tokio::spawn(async move { a2.submit(UserTurn::voice("go")).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The user talks over Markon: the app switches to listening, then cancels the reply.
+    a.set_state(AgentState::Speaking);
+    a.set_state(AgentState::Listening);
+    a.cancel();
+    h.await.unwrap();
+    let ev = drain(&mut rx).await;
+    assert!(ev.iter().any(|e| matches!(e, AgentEvent::TurnCancelled { .. })));
+    assert_eq!(a.state(), AgentState::Listening);
+    assert_eq!(states(&ev).last(), Some(&AgentState::Listening));
+}
+
+#[tokio::test]
 async fn prompt_sections_compose_the_system_prompt() {
     let (mut a, fake, _rx) = agent(vec![FakeProvider::text("ok")]);
     a.add_section(Arc::new(StaticSection("You are Markon.".into())));
