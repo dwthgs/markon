@@ -55,6 +55,10 @@ pub enum AudioEvent {
     Error {
         message: String,
     },
+    /// "Hey Markon" was heard; `rest` is anything said in the same breath.
+    Wake {
+        rest: String,
+    },
 }
 
 pub type EventSink = Arc<dyn Fn(AudioEvent) + Send + Sync>;
@@ -87,6 +91,9 @@ pub struct Audio {
     play: Arc<Playback>,
     jobs: Sender<Job>,
     first_of_reply: AtomicBool,
+    /// True while a listening session holds the microphone (the wake listener steps aside).
+    listening: Arc<AtomicBool>,
+    wake: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
 }
 
 impl Audio {
@@ -114,6 +121,8 @@ impl Audio {
             play,
             jobs,
             first_of_reply: AtomicBool::new(true),
+            listening: Arc::new(AtomicBool::new(false)),
+            wake: Mutex::new(None),
         }
     }
 
@@ -121,6 +130,41 @@ impl Audio {
     pub fn set_engines(&self, stt: Option<Box<dyn SttEngine>>, tts: Option<Box<dyn TtsEngine>>) {
         *self.stt.lock().expect("stt") = stt;
         *self.tts.lock().expect("tts") = tts;
+    }
+
+    /// Listen for "Hey Markon" in the background until `stop_wake`. Needs the models loaded.
+    pub fn start_wake(&self) {
+        let mut w = self.wake.lock().expect("wake");
+        if w.is_some() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let (st, listening, play, sink, stt) = (
+            stop.clone(),
+            self.listening.clone(),
+            self.play.clone(),
+            self.sink.clone(),
+            self.stt.clone(),
+        );
+        // Paused while a session has the mic or Markon is speaking, so its own voice cannot wake it.
+        let paused = move || listening.load(Ordering::SeqCst) || play.active.load(Ordering::SeqCst);
+        let transcribe = move |pcm16: &[f32]| {
+            let mut guard = stt.lock().ok()?;
+            guard.as_mut()?.transcribe(pcm16).ok()
+        };
+        if let Ok(t) = std::thread::Builder::new()
+            .name("markon-wake".into())
+            .spawn(move || crate::wake::wake_thread(st, paused, sink, transcribe))
+        {
+            *w = Some((stop, t));
+        }
+    }
+
+    pub fn stop_wake(&self) {
+        if let Some((stop, t)) = self.wake.lock().expect("wake").take() {
+            stop.store(true, Ordering::SeqCst);
+            let _ = t.join();
+        }
     }
 
     pub fn is_ready(&self) -> bool {
@@ -193,6 +237,7 @@ impl Audio {
         };
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => {
+                self.listening.store(true, Ordering::SeqCst);
                 *cap = Some(Capture {
                     stop,
                     buf,
@@ -227,6 +272,7 @@ impl Audio {
         let stopped = Instant::now();
         cap.stop.store(true, Ordering::SeqCst);
         let _ = cap.thread.join();
+        self.listening.store(false, Ordering::SeqCst);
         let rate = *cap.rate.lock().expect("rate");
         let pcm = std::mem::take(&mut *cap.buf.lock().expect("buf"));
         let pcm16 = resample(&pcm, rate, WHISPER_RATE);

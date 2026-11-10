@@ -353,6 +353,8 @@ impl Core {
             Ok(()) => {
                 self.models_ready.store(true, Ordering::SeqCst);
                 self.note("");
+                // "Hey Markon" works once whisper is loaded.
+                self.audio.start_wake();
             }
             Err(e) => self.note(format!("Voice is off: {e}")),
         }
@@ -454,6 +456,21 @@ impl Core {
                     let c = self.clone();
                     tauri::async_runtime::spawn_blocking(move || {
                         c.start_listening(session, crate::ptt::FOLLOW_UP)
+                    });
+                }
+            }
+            AudioEvent::Wake { rest } => {
+                let c = self.clone();
+                if rest.split_whitespace().count() >= 2 {
+                    // "Hey Markon, what's the weather": the request came in the same breath.
+                    let text = rest.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::show_window(&c.app);
+                        c.submit(UserTurn::voice(&text)).await;
+                    });
+                } else if let Some(session) = self.ptt.lock().expect("ptt").follow_up() {
+                    tauri::async_runtime::spawn_blocking(move || {
+                        c.start_listening(session, crate::ptt::NO_SPEECH)
                     });
                 }
             }

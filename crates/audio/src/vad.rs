@@ -8,6 +8,8 @@ pub enum EndOfSpeech {
 
 pub struct Vad {
     sr: u32,
+    end_ms: usize,
+    end_mid_ms: usize,
     speaking: bool,
     silent_samples: usize,
     noise: f32,
@@ -22,7 +24,18 @@ const MIN_LEVEL: f32 = 0.01;
 impl Vad {
     pub fn new(sr: u32) -> Self {
         Self {
+            end_ms: END_MS,
+            end_mid_ms: END_MID_CLAUSE_MS,
+            ..Self::with_end(sr, END_MS)
+        }
+    }
+
+    /// A fixed end-of-speech pause (the wake listener wants short bursts).
+    pub fn with_end(sr: u32, end_ms: usize) -> Self {
+        Self {
             sr,
+            end_ms,
+            end_mid_ms: end_ms,
             speaking: false,
             silent_samples: 0,
             noise: 0.0,
@@ -57,9 +70,9 @@ impl Vad {
         }
         self.silent_samples += chunk.len();
         let wait = if mid_clause {
-            END_MID_CLAUSE_MS
+            self.end_mid_ms
         } else {
-            END_MS
+            self.end_ms
         };
         if self.silent_samples * 1000 >= wait * self.sr as usize {
             self.speaking = false;

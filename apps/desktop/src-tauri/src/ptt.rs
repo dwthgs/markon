@@ -60,7 +60,8 @@ impl Ptt {
         }
     }
 
-    /// Markon finished speaking: listen hands-free for a reply. `None` while the key is down.
+    /// Listen hands-free without the key: after Markon speaks, or after "Hey Markon".
+    /// `None` while the key is down or a hands-free session is already open.
     pub fn follow_up(&mut self) -> Option<u64> {
         if self.down_at.is_some() || self.latched {
             return None;

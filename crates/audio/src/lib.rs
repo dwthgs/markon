@@ -9,6 +9,7 @@ pub mod service;
 pub mod stt;
 pub mod tts;
 pub mod vad;
+pub mod wake;
 
 pub use service::{Audio, AudioEvent, Who};
 pub use tts::Voice;
