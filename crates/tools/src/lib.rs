@@ -483,15 +483,25 @@ impl ToolRuntime for Shared {
 
 impl Runtime {
     pub async fn call(&self, c: ToolCall) -> Result<String, String> {
-        if c.name == "close_cards" {
+        let screen = match c.name.as_str() {
+            "close_cards" => Some(("close", "latest", "Closed.")),
+            "pause_media" => match c.input["action"].as_str() {
+                Some("play") => Some(("play", "media", "Playing again.")),
+                _ => Some(("pause", "media", "Paused.")),
+            },
+            _ => None,
+        };
+        if let Some((command, default, done)) = screen {
             // A screen action, not work to show: no card of its own.
-            let which = c.input["which"].as_str().unwrap_or("latest").trim();
-            let which = if which.is_empty() { "latest" } else { which };
+            let which = c.input["which"].as_str().map(str::trim).unwrap_or("");
+            let which = if which.is_empty() { default } else { which };
             (self.cards)(
-                Card::new(format!("tool-{}", c.id), c.turn_id, CardKind::Note, "close")
-                    .with(CardStatus::Closed, json!({"which": which})),
+                Card::new(format!("tool-{}", c.id), c.turn_id, CardKind::Note, command).with(
+                    CardStatus::Command,
+                    json!({"command": command, "which": which}),
+                ),
             );
-            return Ok("Closed.".into());
+            return Ok(done.into());
         }
         let card = Card::new(
             format!("tool-{}", c.id),

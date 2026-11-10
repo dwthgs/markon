@@ -106,7 +106,10 @@ test('each card has a working close button', async ({ page }) => {
 test('Markon closes cards when asked: by title, media, latest or all', async ({ page }) => {
   await open(page);
   const close = (which: string) =>
-    emit(page, 'markon://card', { ...card(`c-${which}`, 'note', 'close', { which }), status: 'closed' });
+    emit(page, 'markon://card', {
+      ...card(`c-${which}`, 'note', 'close', { command: 'close', which }),
+      status: 'command',
+    });
   await emit(page, 'markon://card', card('n', 'note', 'Shopping list', { text: 'milk' }));
   await emit(page, 'markon://card', card('v', 'video', 'Summertime Sadness', { youtube: 'dQw4w9WgXcQ' }));
   await emit(page, 'markon://card', card('w', 'video', 'Summertime Sadness', { youtube: 'dQw4w9WgXcQ' }));
@@ -122,4 +125,30 @@ test('Markon closes cards when asked: by title, media, latest or all', async ({ 
   await expect(page.getByRole('article')).toHaveCount(1);
   await close('all');
   await expect(page.getByRole('article')).toHaveCount(0);
+});
+
+test('Markon pauses and plays media on screen without closing it', async ({ page }) => {
+  await open(page);
+  await emit(page, 'markon://card', card('a', 'audio', 'Song', { path: '/Users/me/Music/song.mp3' }));
+  const audio = page.locator('audio');
+  await audio.evaluate((a: HTMLAudioElement) => {
+    (window as unknown as { log: string[] }).log = [];
+    const log = (window as unknown as { log: string[] }).log;
+    a.pause = () => void log.push('pause');
+    a.play = () => {
+      log.push('play');
+      return Promise.resolve();
+    };
+  });
+  const send = (command: string) =>
+    emit(page, 'markon://card', {
+      ...card(`c-${command}`, 'note', command, { command, which: 'media' }),
+      status: 'command',
+    });
+  await send('pause');
+  await send('play');
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { log: string[] }).log))
+    .toEqual(['pause', 'play']);
+  await expect(page.getByRole('article', { name: /audio: song/i })).toBeVisible();
 });

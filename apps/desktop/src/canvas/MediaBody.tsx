@@ -1,7 +1,8 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { call, inTauri } from '@/lib/tauri';
 import type { Card } from './types';
+import { MEDIA_EVENT, picked } from './useCards';
 
 /** True while Markon listens, thinks or speaks: media plays quietly underneath. */
 export const DuckContext = createContext(false);
@@ -14,6 +15,20 @@ function fileSrc(path: string) {
   } catch {
     return `asset://localhost/${encodeURIComponent(path)}`;
   }
+}
+
+/** Markon's pause_media tool: run `act(play)` when it names this card. */
+function useMediaControl(title: string, act: (play: boolean) => void) {
+  const ref = useRef(act);
+  ref.current = act;
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ which: string; play: boolean }>).detail;
+      if (picked(title, d.which)) ref.current(d.play);
+    };
+    window.addEventListener(MEDIA_EVENT, on);
+    return () => window.removeEventListener(MEDIA_EVENT, on);
+  }, [title]);
 }
 
 function Credit({ children }: { children: React.ReactNode }) {
@@ -45,6 +60,10 @@ function Player({ card }: { card: Card }) {
   useEffect(() => {
     if (ref.current) ref.current.volume = ducked ? DUCKED : 1;
   }, [ducked]);
+  useMediaControl(card.title, (play) => {
+    if (play) void ref.current?.play().catch(() => undefined);
+    else ref.current?.pause();
+  });
   const src = b.path ? fileSrc(b.path) : b.url;
   const props = {
     src,
@@ -65,13 +84,19 @@ function YouTube({ card }: { card: Card }) {
   const id: string = card.body.youtube;
   const ducked = useContext(DuckContext);
   const ref = useRef<HTMLIFrameElement>(null);
+  // The embed's JS API takes commands over postMessage.
+  const send = useCallback(
+    (func: string, args: unknown[] = []) =>
+      ref.current?.contentWindow?.postMessage(
+        JSON.stringify({ event: 'command', func, args }),
+        'https://www.youtube-nocookie.com',
+      ),
+    [],
+  );
   useEffect(() => {
-    // The embed's JS API takes commands over postMessage.
-    ref.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'setVolume', args: [ducked ? DUCKED * 100 : 100] }),
-      'https://www.youtube-nocookie.com',
-    );
-  }, [ducked]);
+    send('setVolume', [ducked ? DUCKED * 100 : 100]);
+  }, [ducked, send]);
+  useMediaControl(card.title, (play) => send(play ? 'playVideo' : 'pauseVideo'));
   return (
     <iframe
       ref={ref}

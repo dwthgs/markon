@@ -78,6 +78,14 @@ pub fn specs() -> Vec<ToolSpec> {
             &["which"],
         ),
         t(
+            "pause_media",
+            "Pause (or play again) audio and video playing on Markon's screen, such as a YouTube \
+             video, without closing it. `action` is pause or play. `which` is \"media\" (all of it, \
+             the default) or words from a card's title. For the Spotify app use the `spotify` tool.",
+            json!({"action": {"type": "string", "enum": ["pause", "play"]}, "which": {"type": "string"}}),
+            &["action"],
+        ),
+        t(
             "spotify",
             "Control the Spotify app and show what is playing on Markon's screen. `action` is play, \
              pause, next, previous or status. To play something specific, pass its open.spotify.com \

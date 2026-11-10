@@ -17,6 +17,13 @@ const ORDER = {
   music: 1,
 } as const satisfies Record<CardKind, number>;
 
+/** Markon's pause_media tool, broadcast to the media cards: `{ which, play }` (MediaBody listens). */
+export const MEDIA_EVENT = 'markon-media';
+export const picked = (title: string, which: string) => {
+  const w = which.trim().toLowerCase();
+  return w === 'media' || w === 'all' || w === 'latest' || title.toLowerCase().includes(w);
+};
+
 /** Which cards Markon's `close_cards` tool means: "all", "media", "latest" or words from a title. */
 export function closing(cards: Card[], which: string): Card[] {
   const w = which.trim().toLowerCase();
@@ -39,18 +46,26 @@ export function useCards() {
   useEffect(() => {
     if (!inTauri()) return;
     const subs = [
-      listen<Card>('markon://card', ({ payload: c }) =>
+      listen<Card>('markon://card', ({ payload: c }) => {
+        if (c.status === 'command') {
+          const which = String(c.body?.which ?? 'latest');
+          if (c.body?.command === 'close') setCards((cs) => closing(cs, which));
+          else
+            window.dispatchEvent(
+              new CustomEvent(MEDIA_EVENT, { detail: { which, play: c.body?.command === 'play' } }),
+            );
+          return;
+        }
         setCards((cs) => {
-          if (c.status === 'closed') return closing(cs, String(c.body?.which ?? 'latest'));
           const i = cs.findIndex((x) => x.id === c.id);
           if (i < 0) return [...cs, c];
           const next = cs.slice();
           next[i] = c;
           return next;
-        }),
-      ),
+        });
+      }),
       listen<Card[]>('markon://cards-load', ({ payload }) =>
-        setCards(payload.filter((c) => c.status !== 'closed')),
+        setCards(payload.filter((c) => c.status !== 'command')),
       ),
       listen<AgentEvent>('markon://agent', ({ payload: e }) => {
         if (e.type === 'turn_cancelled') setCards((cs) => cs.filter((c) => c.turn_id !== e.data.turn_id));

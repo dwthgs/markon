@@ -332,6 +332,22 @@ async fn close_cards_asks_the_screen_to_close_and_shows_no_card_of_its_own() {
         1,
         "one close request, no running/done tool card"
     );
-    assert_eq!(cards[0].1.status, CardStatus::Closed);
+    assert_eq!(cards[0].1.status, CardStatus::Command);
+    assert_eq!(cards[0].1.body["command"], "close");
     assert_eq!(cards[0].1.body["which"], "Summertime");
+}
+
+#[tokio::test]
+async fn pause_media_pauses_without_closing() {
+    let s = setup("pause", vec![]);
+    s.rt.call(call("pause_media", json!({"action": "pause"})))
+        .await
+        .unwrap();
+    let cards = s.cards.lock().unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].1.status, CardStatus::Command);
+    assert_eq!(
+        cards[0].1.body,
+        json!({"command": "pause", "which": "media"})
+    );
 }

@@ -26,8 +26,9 @@ pub enum CardStatus {
     Done,
     Error,
     Blocked,
-    /// Not a card: asks the screen to close cards (`body.which`).
-    Closed,
+    /// Not a card: asks the screen to act on its cards (`body.command`: close, pause or play;
+    /// `body.which`: latest, media, all, or words from a title).
+    Command,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
