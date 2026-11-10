@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 pub mod anthropic;
 pub mod fake;
+pub mod local;
 pub mod openrouter;
 pub mod relay;
 pub mod sse;

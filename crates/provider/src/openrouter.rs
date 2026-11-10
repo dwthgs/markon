@@ -97,7 +97,7 @@ struct Call {
     args: String,
 }
 
-async fn run(
+pub(crate) async fn run(
     rb: reqwest::RequestBuilder,
     tx: &mpsc::Sender<Result<ChatDelta, ProviderError>>,
 ) -> Result<(), ProviderError> {

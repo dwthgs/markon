@@ -202,3 +202,57 @@ async fn relay_unreachable_says_so() {
     let out = collect(p.stream(req("m"))).await;
     assert!(matches!(&out[0], Err(ProviderError::Network(m)) if m.contains("trial service")));
 }
+
+#[tokio::test]
+async fn a_local_server_gets_the_chosen_model_and_no_key() {
+    use markon_provider::local::LocalServer;
+    let body = [
+        r#"{"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}"#,
+        "[DONE]",
+    ]
+    .iter()
+    .map(|e| format!("data: {e}\n\n"))
+    .collect::<String>();
+    let (url, seen) = mock(vec![ok("text/event-stream", &body)]).await;
+    let p = LocalServer::new(&format!("{url}/v1"), "qwen3.5:4b");
+    let out: Vec<_> = collect(p.stream(req("ignored")))
+        .await
+        .into_iter()
+        .map(|d| d.unwrap())
+        .collect();
+    assert_eq!(out[0], ChatDelta::Text("Hi".into()));
+    let raw = seen.lock().unwrap()[0].clone();
+    assert!(raw.starts_with("POST /v1/chat/completions"));
+    assert!(raw.contains("\"model\":\"qwen3.5:4b\""));
+    assert!(
+        !raw.to_lowercase().contains("authorization"),
+        "nothing to authorise on this Mac"
+    );
+    assert_eq!(p.route(), "local");
+}
+
+#[tokio::test]
+async fn a_local_server_without_the_model_says_how_to_get_it() {
+    use markon_provider::local::LocalServer;
+    let (url, _) = mock(vec![ok(
+        "application/json",
+        r#"{"data":[{"id":"llama3.2:3b"}]}"#,
+    )])
+    .await;
+    let err = LocalServer::new(&url, "qwen3.5:4b")
+        .validate()
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("ollama pull qwen3.5:4b"), "{err}");
+    let (url, _) = mock(vec![ok(
+        "application/json",
+        r#"{"data":[{"id":"qwen3.5:4b"}]}"#,
+    )])
+    .await;
+    assert!(
+        LocalServer::new(&url, "qwen3.5:4b")
+            .validate()
+            .await
+            .is_ok()
+    );
+}
