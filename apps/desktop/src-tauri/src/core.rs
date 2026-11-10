@@ -474,6 +474,23 @@ impl Core {
                     });
                 }
             }
+            AudioEvent::BargeIn => {
+                // Take the session first, so the PlaybackEnded from cancelling does not open another.
+                let session = {
+                    let mut p = self.ptt.lock().expect("ptt");
+                    let s = p.follow_up();
+                    p.speech_started();
+                    s
+                };
+                if let Some(session) = session {
+                    self.audio.cancel_speech();
+                    self.agent.cancel();
+                    let c = self.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        c.start_listening(session, crate::ptt::NO_SPEECH)
+                    });
+                }
+            }
             AudioEvent::SpeechStarted => self.ptt.lock().expect("ptt").speech_started(),
             AudioEvent::SpeechEnded => {
                 let action = self.ptt.lock().expect("ptt").speech_ended();

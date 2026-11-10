@@ -1,5 +1,6 @@
 //! Audio pipeline: capture, end-of-speech, whisper, Kokoro, playback and the features
 //! that drive the voice core.
+pub mod echo;
 pub mod features;
 pub mod g2p;
 pub mod manifest;

@@ -10,7 +10,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -45,6 +45,8 @@ pub enum AudioEvent {
     },
     PlaybackStarted,
     PlaybackEnded,
+    /// The user started talking while Markon was speaking.
+    BargeIn,
     NoMicrophone,
     MicDenied,
     ModelsLoading,
@@ -77,10 +79,13 @@ enum Job {
     Speak { generation: u64, text: String },
 }
 
-struct Playback {
+pub(crate) struct Playback {
     queue: Mutex<VecDeque<f32>>,
     generation: AtomicU64,
-    active: AtomicBool,
+    pub(crate) active: AtomicBool,
+    /// What the speakers just played, for the echo canceller (mono, at `render_rate`).
+    pub(crate) render: Mutex<Vec<f32>>,
+    pub(crate) render_rate: AtomicU32,
 }
 
 pub struct Audio {
@@ -104,6 +109,8 @@ impl Audio {
             queue: Mutex::new(VecDeque::new()),
             generation: AtomicU64::new(0),
             active: AtomicBool::new(false),
+            render: Mutex::new(Vec::new()),
+            render_rate: AtomicU32::new(0),
         });
         let (jobs, rx) = channel();
         {
@@ -146,15 +153,13 @@ impl Audio {
             self.sink.clone(),
             self.stt.clone(),
         );
-        // Paused while a session has the mic or Markon is speaking, so its own voice cannot wake it.
-        let paused = move || listening.load(Ordering::SeqCst) || play.active.load(Ordering::SeqCst);
         let transcribe = move |pcm16: &[f32]| {
             let mut guard = stt.lock().ok()?;
             guard.as_mut()?.transcribe(pcm16).ok()
         };
         if let Ok(t) = std::thread::Builder::new()
             .name("markon-wake".into())
-            .spawn(move || crate::wake::wake_thread(st, paused, sink, transcribe))
+            .spawn(move || crate::wake::wake_thread(st, listening, play, sink, transcribe))
         {
             *w = Some((stop, t));
         }
@@ -449,6 +454,7 @@ fn open_output(play: Arc<Playback>, sink: EventSink) -> Result<Output, AudioErro
         .map_err(|e| AudioError::Device(e.to_string()))?;
     let channels = cfg.channels() as usize;
     let rate = cfg.sample_rate();
+    play.render_rate.store(rate, Ordering::SeqCst);
     let mut fx = FeatureExtractor::new(rate);
     let mut mono = Vec::with_capacity(4096);
     let stream = dev
@@ -462,6 +468,15 @@ fn open_output(play: Arc<Playback>, sink: EventSink) -> Result<Output, AudioErro
                         let s = q.pop_front().unwrap_or(0.0);
                         frame.fill(s);
                         mono.push(s);
+                    }
+                }
+                if let Ok(mut r) = play.render.try_lock() {
+                    r.extend_from_slice(&mono);
+                    // Nobody reading (no microphone): keep at most a second.
+                    let cap = rate as usize;
+                    if r.len() > cap {
+                        let extra = r.len() - cap;
+                        r.drain(..extra);
                     }
                 }
                 if play.active.load(Ordering::Relaxed)

@@ -1,8 +1,9 @@
 //! "Hey Markon" / "Hey Markan" / "Hey Mark" without a dedicated wake-word model: an energy detector cuts
 //! short bursts of speech from an always-open microphone, whisper transcribes each burst on device, and
 //! the text is matched against the wake phrase. Audio is never stored or sent anywhere.
+use crate::echo::{BargeIn, Echo};
 use crate::resample::{downmix, resample};
-use crate::service::{AudioEvent, EventSink, WHISPER_RATE};
+use crate::service::{AudioEvent, EventSink, Playback, WHISPER_RATE};
 use crate::vad::{EndOfSpeech, Vad};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -115,7 +116,9 @@ impl Segmenter {
                 // Speech only: without the pre-roll and the closing silence.
                 let tail = self.rate * WAKE_END_MS / 1000;
                 let ms = seg.len().saturating_sub(self.lead + tail) * 1000 / self.rate;
-                (MIN_SEGMENT_MS..=MAX_SEGMENT_MS).contains(&ms).then_some(seg)
+                (MIN_SEGMENT_MS..=MAX_SEGMENT_MS)
+                    .contains(&ms)
+                    .then_some(seg)
             }
             None => {
                 // Too long to be a wake phrase: drop it and ignore the rest of this burst.
@@ -140,10 +143,12 @@ impl Segmenter {
     }
 }
 
-/// Runs until `stop`. Skips audio while `paused()` (Markon is listening or speaking).
+/// Runs until `stop`. Three modes: a listening session has the mic (do nothing); Markon is speaking
+/// (cancel its echo and watch for the user talking over it); otherwise wait for the wake phrase.
 pub(crate) fn wake_thread(
     stop: Arc<AtomicBool>,
-    paused: impl Fn() -> bool,
+    listening: Arc<AtomicBool>,
+    play: Arc<Playback>,
     sink: EventSink,
     transcribe: impl Fn(&[f32]) -> Option<String>,
 ) {
@@ -176,19 +181,55 @@ pub(crate) fn wake_thread(
         return;
     }
     let mut seg = Segmenter::new(rate);
-    let chunk = rate as usize / 100;
+    let mut echo = Echo::new(rate);
+    if echo.is_none() {
+        eprintln!("[wake] echo canceller unavailable at {rate} Hz: talking over Markon is off");
+    }
+    let mut barge = BargeIn::default();
+    let mut barged = false;
+    let chunk = echo
+        .as_ref()
+        .map(Echo::frame_len)
+        .unwrap_or(rate as usize / 100);
     let mut pending: Vec<f32> = Vec::new();
     while !stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(30));
         let fresh = std::mem::take(&mut *shared.lock().expect("wake buf"));
-        if paused() {
+        let played = std::mem::take(&mut *play.render.lock().expect("render"));
+        if listening.load(Ordering::SeqCst) {
             seg.reset();
             pending.clear();
             continue;
         }
+        let speaking = play.active.load(Ordering::SeqCst);
+        if let Some(e) = echo.as_mut() {
+            let out_rate = play.render_rate.load(Ordering::SeqCst);
+            if out_rate == rate || out_rate == 0 {
+                e.played(&played);
+            } else {
+                e.played(&resample(&played, out_rate, rate));
+            }
+        }
         pending.extend(fresh);
-        let mut burst = None;
         let whole = pending.len() / chunk * chunk;
+        if speaking {
+            // Markon's own voice must never wake it; only a person talking over it counts.
+            seg.reset();
+            if let Some(e) = echo.as_mut() {
+                for c in pending[..whole].chunks_exact_mut(chunk) {
+                    e.clean(c);
+                    if barge.push(c) && !barged {
+                        barged = true;
+                        sink(AudioEvent::BargeIn);
+                    }
+                }
+            }
+            pending.drain(..whole);
+            continue;
+        }
+        barge.reset();
+        barged = false;
+        let mut burst = None;
         for c in pending[..whole].chunks(chunk) {
             if let Some(b) = seg.push(c) {
                 burst = Some(b);
@@ -200,7 +241,8 @@ pub(crate) fn wake_thread(
             continue;
         };
         if let Some(rest) = match_wake(&text)
-            && !paused()
+            && !listening.load(Ordering::SeqCst)
+            && !play.active.load(Ordering::SeqCst)
         {
             sink(AudioEvent::Wake { rest });
         }
