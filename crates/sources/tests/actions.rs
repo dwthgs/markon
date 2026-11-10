@@ -83,6 +83,7 @@ fn world(name: &str, answer: Decision) -> World {
             sources: Arc::new(RwLock::new(list)),
             cards: sink.clone(),
             memory: memory.clone(),
+            private: Default::default(),
         },
         accounts: Arc::new(RwLock::new(Accounts {
             imessage: true,

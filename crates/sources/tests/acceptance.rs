@@ -241,6 +241,7 @@ async fn connected(name: &str) -> (WithSources<NoTools>, Seen, Arc<Memory>) {
             sources,
             cards: Arc::new(move |c| s.lock().unwrap().push(c)),
             memory: memory.clone(),
+            private: Default::default(),
         },
         seen,
         memory,
@@ -295,6 +296,7 @@ async fn no_sources_switched_on_means_nothing_is_read() {
         sources: Arc::new(RwLock::new(vec![])),
         cards: Arc::new(|_| {}),
         memory,
+        private: Default::default(),
     };
     let out = rt
         .call(ToolCall {
@@ -346,5 +348,64 @@ async fn what_did_i_miss_end_to_end_with_the_agent() {
             .filter(|c| c.kind == CardKind::Source)
             .count(),
         3
+    );
+}
+
+/// A private source's text never reaches the cloud model; a local model summarises it.
+#[tokio::test]
+async fn private_sources_are_summarised_on_this_mac_or_left_out() {
+    use markon_sources::tool::{Private, for_cloud, for_model};
+    let d = tmp("private");
+    let now = now_ms();
+    messages_db(&d.join("chat.db"), now);
+    let src: Vec<Arc<dyn Source>> = vec![Arc::new(mac::Messages {
+        db: d.join("chat.db"),
+        contacts: vec![],
+    })];
+    let reports = markon_sources::collect(&src, now - 86_400_000, Duration::from_secs(5)).await;
+
+    let none = for_model(
+        &for_cloud(
+            reports.clone(),
+            &Private {
+                ids: vec!["imessage".into()],
+                summariser: None,
+            },
+        )
+        .await,
+    );
+    assert!(
+        !none.contains("Running late") && !none.contains("Rope"),
+        "{none}"
+    );
+    assert!(none.contains("kept private"));
+
+    let local = Arc::new(FakeProvider::new(vec![FakeProvider::text(
+        "Two people wrote: one is late, one has the rope.",
+    )]));
+    let p = Private {
+        ids: vec!["imessage".into()],
+        summariser: Some((local.clone(), "local".into())),
+    };
+    let out = for_model(&for_cloud(reports.clone(), &p).await);
+    assert!(
+        out.contains("one has the rope") && out.contains("summarised on this Mac"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("Rope is in my car"),
+        "the raw text stays on the Mac"
+    );
+    let asked = serde_json::to_string(&local.requests.lock().unwrap()[0].messages).unwrap();
+    assert!(
+        asked.contains("Rope is in my car"),
+        "the local model saw the raw text"
+    );
+    assert!(local.requests.lock().unwrap()[0].tools.is_empty());
+
+    let public = for_model(&for_cloud(reports, &Private::default()).await);
+    assert!(
+        public.contains("Rope is in my car"),
+        "sources not marked private are unchanged"
     );
 }
