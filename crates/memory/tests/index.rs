@@ -124,3 +124,38 @@ fn wiping_clears_the_index_and_people_too() {
     assert_eq!(m.chunk_count().unwrap(), 0);
     assert_eq!(m.person_for("email", "sam@example.com").unwrap(), None);
 }
+
+#[test]
+fn traces_are_kept_newest_first_with_their_tool_times() {
+    use markon_memory::traces::{ToolTime, Trace};
+    let m = Memory::open_in_memory().unwrap();
+    let id = m
+        .record_trace(&Trace {
+            user_text: "what did I miss".into(),
+            provider: "anthropic".into(),
+            stt_ms: Some(350),
+            first_text_ms: Some(900),
+            total_ms: 2400,
+            tools: vec![ToolTime {
+                name: "what_did_i_miss".into(),
+                ms: 1200,
+                ok: true,
+            }],
+            ok: true,
+            ..Default::default()
+        })
+        .unwrap();
+    m.set_first_audio(id, 1100).unwrap();
+    m.record_trace(&Trace {
+        user_text: "second".into(),
+        ok: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let t = m.traces(10).unwrap();
+    assert_eq!(t[0].user_text, "second");
+    assert_eq!(t[1].first_audio_ms, Some(1100));
+    assert_eq!(t[1].tools[0].ms, 1200);
+    m.wipe().unwrap();
+    assert!(m.traces(10).unwrap().is_empty());
+}
