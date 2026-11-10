@@ -15,8 +15,36 @@ const MIN_SEGMENT_MS: usize = 400;
 const MAX_SEGMENT_MS: usize = 8000;
 /// Audio kept from before the detector fires, so the "h" of "hey" is not lost.
 const PRE_ROLL_MS: usize = 300;
-/// Speech kept from before a barge-in is confirmed (confirmation itself takes about 150 ms).
-const BARGE_LEAD_MS: usize = 700;
+/// Speech kept from before a barge-in is confirmed (confirmation itself takes about 250 ms).
+const BARGE_LEAD_MS: usize = 900;
+
+/// Whisper's guesses for noise or a mumble: not a person talking to Markon.
+const FILLERS: &[&str] = &[
+    "you",
+    "thank you",
+    "thanks",
+    "bye",
+    "uh",
+    "um",
+    "hmm",
+    "mm",
+    "oh",
+    "ah",
+    "huh",
+    "so",
+    "okay",
+];
+
+/// Real words in a transcript of audio heard over Markon.
+pub fn is_words(text: &str) -> bool {
+    let t: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'')
+        .collect();
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !FILLERS.contains(&t.as_str())
+}
 
 /// Microphone audio (rate, mono samples) said over Markon, waiting for the listening session.
 pub type Handoff = Arc<Mutex<(u32, Vec<f32>)>>;
@@ -248,6 +276,14 @@ pub(crate) fn wake_thread(
                         Barge::Hint => play.duck.store(true, Ordering::SeqCst),
                         Barge::Quiet => play.duck.store(false, Ordering::SeqCst),
                         Barge::Confirmed => {
+                            // Only words stop Markon: noises and leftover echo of its own voice
+                            // transcribe to nothing (or a filler), so it carries on at full volume.
+                            let heard = transcribe(&resample(&recent, rate, WHISPER_RATE));
+                            if !heard.as_deref().is_some_and(is_words) {
+                                barge.reset();
+                                play.duck.store(false, Ordering::SeqCst);
+                                continue;
+                            }
                             // Stop right here, without waiting for the app, then tell it.
                             play.cut();
                             // The words that triggered it belong to the user's request: hand them over.
@@ -301,6 +337,18 @@ pub(crate) fn wake_thread(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_real_words_count_as_talking_over_markon() {
+        assert!(super::is_words("wait, stop"));
+        assert!(super::is_words("No."));
+        assert!(!super::is_words(""));
+        assert!(!super::is_words(" you "));
+        assert!(!super::is_words("Thank you."));
+        assert!(!super::is_words("Hmm"));
+        assert!(!super::is_words("..."));
+    }
+
     use super::*;
 
     #[test]

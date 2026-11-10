@@ -47,7 +47,7 @@ impl Echo {
 }
 
 /// Speech in the cleaned signal, in two stages: a hint (duck Markon's voice at once) and a confirmed
-/// barge-in (stop). Judged over the last 250 ms.
+/// barge-in (stop). Judged over the last 350 ms.
 #[derive(Default)]
 pub struct BargeIn {
     window: std::collections::VecDeque<bool>,
@@ -63,9 +63,10 @@ pub enum Barge {
     Confirmed,
 }
 
-const WINDOW_FRAMES: usize = 25;
+const WINDOW_FRAMES: usize = 35;
 const HINT_FRAMES: usize = 5;
-const CONFIRM_FRAMES: usize = 15;
+// A cough, a click or a burst of echo is shorter than this; a person starting to talk is not.
+const CONFIRM_FRAMES: usize = 25;
 const MIN_LEVEL: f32 = 0.02;
 
 impl BargeIn {
@@ -145,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn hints_within_50_ms_and_confirms_within_150_ms() {
+    fn hints_within_50_ms_and_confirms_within_250_ms() {
         let mut b = BargeIn::default();
         let quiet = vec![0.005f32; 160];
         let loud: Vec<f32> = (0..160).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
@@ -153,7 +154,7 @@ mod tests {
             (0..100).all(|_| b.push(&quiet) == Barge::Quiet),
             "residual echo"
         );
-        let states: Vec<Barge> = (0..20).map(|_| b.push(&loud)).collect();
+        let states: Vec<Barge> = (0..30).map(|_| b.push(&loud)).collect();
         assert_eq!(
             states.iter().position(|s| *s == Barge::Hint),
             Some(HINT_FRAMES - 1)
@@ -172,10 +173,10 @@ mod tests {
         (0..50).for_each(|_| {
             b.push(&quiet);
         });
-        let click: Vec<Barge> = (0..8).map(|_| b.push(&loud)).collect();
+        let click: Vec<Barge> = (0..20).map(|_| b.push(&loud)).collect();
         assert!(!click.contains(&Barge::Confirmed));
         assert!(click.contains(&Barge::Hint));
-        let after: Vec<Barge> = (0..30).map(|_| b.push(&quiet)).collect();
+        let after: Vec<Barge> = (0..40).map(|_| b.push(&quiet)).collect();
         assert_eq!(after.last(), Some(&Barge::Quiet));
     }
 }
