@@ -20,6 +20,8 @@ pub struct SettingsView {
     sources: Value,
     automation: Value,
     local: Value,
+    traces: Vec<markon_memory::traces::Trace>,
+    proposals: Vec<markon_scheduler::proposals::Proposal>,
     endpoints: Vec<Value>,
     data_dir: String,
 }
@@ -75,6 +77,11 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
         sources: crate::sources::view(&core),
         automation: automation(&core),
         local: local(&core, &s),
+        traces: core.memory.traces(15).unwrap_or_default(),
+        proposals: markon_scheduler::proposals::list(&[
+            core.dir.join("agents"),
+            core.skills.root.clone(),
+        ]),
         endpoints,
         data_dir: core.dir.display().to_string(),
         settings: s,
@@ -170,6 +177,103 @@ fn automation(core: &crate::core::Core) -> Value {
         "skills": skills.iter().map(|s| json!({"name": s.name, "description": s.description, "trust": s.trust})).collect::<Vec<_>>(),
         "skill_problems": skill_problems,
     })
+}
+
+/// Ask the model for better wording of the user's agent files and skills, from the problems in
+/// recent traces. Each proposal sits beside its file until approved.
+#[tauri::command]
+pub async fn suggest_improvements(core: State<'_, CoreState>) -> Result<usize, String> {
+    let traces = core.memory.traces(50).map_err(|e| e.to_string())?;
+    let notes: Vec<String> = traces
+        .iter()
+        .filter(|t| !t.ok || t.total_ms > 8000 || t.tools.iter().any(|x| !x.ok))
+        .take(20)
+        .map(|t| {
+            let failed: Vec<&str> = t
+                .tools
+                .iter()
+                .filter(|x| !x.ok)
+                .map(|x| x.name.as_str())
+                .collect();
+            format!(
+                "\"{}\": {} ms{}",
+                t.user_text,
+                t.total_ms,
+                if failed.is_empty() {
+                    String::new()
+                } else {
+                    format!(", failed: {}", failed.join(", "))
+                }
+            )
+        })
+        .collect();
+    let notes = if notes.is_empty() {
+        "No problems in recent turns; only clarify wording.".to_string()
+    } else {
+        notes.join("\n")
+    };
+    let mut files: Vec<PathBuf> = markon_scheduler::files::load_dir(&core.dir.join("agents"))
+        .0
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect();
+    files.extend(
+        core.skills
+            .all()
+            .0
+            .into_iter()
+            .filter_map(|k| k.dir.map(|d| d.join("SKILL.md"))),
+    );
+    let provider = core.agent.provider();
+    let model = core
+        .settings
+        .lock()
+        .expect("settings")
+        .model
+        .clone()
+        .unwrap_or_else(|| provider.default_model());
+    let mut n = 0;
+    for f in files.into_iter().take(5) {
+        if markon_scheduler::proposals::propose(&*provider, &model, &f, &notes)
+            .await?
+            .is_some()
+        {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Only files in Markon's own agent and skill folders can be changed this way.
+fn own_file(core: &crate::core::Core, path: &std::path::Path) -> Result<PathBuf, String> {
+    let p = path.to_path_buf();
+    let ok = p.starts_with(core.dir.join("agents")) || p.starts_with(&core.skills.root);
+    if ok && !p.components().any(|c| c == std::path::Component::ParentDir) {
+        Ok(p)
+    } else {
+        Err("not a Markon agent or skill file".into())
+    }
+}
+
+#[tauri::command]
+pub fn approve_proposal(core: State<'_, CoreState>, path: PathBuf) -> Result<(), String> {
+    let p = own_file(&core, &path)?;
+    markon_scheduler::proposals::approve(&p)?;
+    // The user approved this exact text, so a skill stays theirs.
+    match (
+        p.file_name().and_then(|f| f.to_str()),
+        p.parent()
+            .and_then(|d| d.file_name())
+            .and_then(|d| d.to_str()),
+    ) {
+        (Some("SKILL.md"), Some(name)) => core.skills.approve(name),
+        _ => Ok(()),
+    }
+}
+
+#[tauri::command]
+pub fn reject_proposal(core: State<'_, CoreState>, path: PathBuf) -> Result<(), String> {
+    markon_scheduler::proposals::reject(&own_file(&core, &path)?)
 }
 
 /// The user approves an unreviewed skill as it is now.

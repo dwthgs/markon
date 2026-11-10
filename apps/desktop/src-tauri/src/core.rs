@@ -47,6 +47,8 @@ pub struct Core {
     pub accounts: Arc<std::sync::RwLock<markon_sources::act::Accounts>>,
     pub private: Arc<std::sync::RwLock<markon_sources::tool::Private>>,
     pub embed: markon_sources::search::SharedEmbedder,
+    /// Speech-to-text time for the next turn, when the turn was sent, its first sound.
+    trace: Mutex<(Option<u64>, Option<Instant>, Option<u64>)>,
     pub skills: markon_tools::skills::Library,
     /// The conversation turns and cards are written to (one per session or scheduled run).
     conv: Arc<Mutex<Option<i64>>>,
@@ -382,36 +384,47 @@ impl Core {
             &dir.join("models"),
         )));
         let embed: markon_sources::search::SharedEmbedder = Default::default();
+        let browser: Option<Arc<dyn markon_hands::Driver>> =
+            markon_platform::chrome_path().map(|exe| {
+                Arc::new(markon_hands::chrome::Chrome::new(exe, dir.join("browser")))
+                    as Arc<dyn markon_hands::Driver>
+            });
         let (mut agent, mut rx) = Agent::new(
             provider,
-            Arc::new(crate::remember::WithMemory {
-                inner: markon_sources::search::WithSearch {
-                    inner: markon_sources::act::WithActions {
-                        inner: markon_sources::tool::WithSources {
-                            inner: markon_tools::skills::WithSkills {
-                                inner: markon_scheduler::reminders::WithReminders {
-                                    inner: workspace::shared(&tools),
-                                    reminders: reminders.clone(),
+            Arc::new(markon_hands::WithHands {
+                browser,
+                perms: tools.perms.clone(),
+                cards: card_sink.clone(),
+                refs: Default::default(),
+                inner: crate::remember::WithMemory {
+                    inner: markon_sources::search::WithSearch {
+                        inner: markon_sources::act::WithActions {
+                            inner: markon_sources::tool::WithSources {
+                                inner: markon_tools::skills::WithSkills {
+                                    inner: markon_scheduler::reminders::WithReminders {
+                                        inner: workspace::shared(&tools),
+                                        reminders: reminders.clone(),
+                                    },
+                                    library: skills.clone(),
+                                    perms: tools.perms.clone(),
                                 },
-                                library: skills.clone(),
-                                perms: tools.perms.clone(),
+                                sources: sources.clone(),
+                                cards: card_sink.clone(),
+                                memory: memory.clone(),
+                                private: private.clone(),
+                                embed: embed.clone(),
                             },
-                            sources: sources.clone(),
+                            accounts: accounts.clone(),
+                            outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
+                            perms: tools.perms.clone(),
                             cards: card_sink.clone(),
                             memory: memory.clone(),
-                            private: private.clone(),
-                            embed: embed.clone(),
                         },
-                        accounts: accounts.clone(),
-                        outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
-                        perms: tools.perms.clone(),
-                        cards: card_sink.clone(),
                         memory: memory.clone(),
+                        embed: embed.clone(),
                     },
-                    memory: memory.clone(),
-                    embed: embed.clone(),
+                    pending: pending_facts.clone(),
                 },
-                pending: pending_facts.clone(),
             }),
             AgentConfig {
                 model: settings.model.clone(),
@@ -448,6 +461,7 @@ impl Core {
             accounts,
             private,
             embed,
+            trace: Mutex::new((None, None, None)),
             skills,
             conv,
             turn_card_ids,
@@ -658,6 +672,10 @@ impl Core {
         match e {
             AudioEvent::PlaybackStarted => {
                 self.agent.set_state(AgentState::Speaking);
+                let mut t = self.trace.lock().expect("trace");
+                if let (Some(sent), None) = (t.1, t.2) {
+                    t.2 = Some(sent.elapsed().as_millis() as u64);
+                }
             }
             AudioEvent::PlaybackEnded | AudioEvent::Error { .. }
                 if self.turn_done.load(Ordering::SeqCst)
@@ -795,7 +813,9 @@ impl Core {
         let c = self.clone();
         tauri::async_runtime::spawn(async move {
             let audio = c.audio.clone();
+            let stt = Instant::now();
             let text = tokio::task::spawn_blocking(move || audio.stop_listening()).await;
+            c.trace.lock().expect("trace").0 = Some(stt.elapsed().as_millis() as u64);
             match &text {
                 Ok(Ok(t)) => eprintln!("[ptt] transcript: {} chars", t.trim().len()),
                 Ok(Err(e)) => eprintln!("[ptt] transcription failed: {e}"),
@@ -899,6 +919,14 @@ impl Core {
         self.reset_reply();
         self.turn_done.store(false, Ordering::SeqCst);
         *self.last_user.lock().expect("last_user") = turn.text.clone();
+        {
+            let mut t = self.trace.lock().expect("trace");
+            if turn.source != markon_agent::TurnSource::Voice {
+                t.0 = None;
+            }
+            t.1 = Some(Instant::now());
+            t.2 = None;
+        }
         self.agent.submit(turn).await;
     }
 
@@ -931,7 +959,36 @@ impl Core {
     }
 
     /// Only finished turns are written: a cancelled turn leaves no half-written memory.
+    /// Where the turn's time went: kept on this Mac only.
+    fn record_trace(&self, t: &markon_agent::TurnSummary) {
+        let (stt, _, audio) = std::mem::take(&mut *self.trace.lock().expect("trace"));
+        let _ = self.memory.record_trace(&markon_memory::traces::Trace {
+            user_text: t.user.clone(),
+            provider: t.provider.clone(),
+            model: t.model.clone(),
+            stt_ms: stt,
+            first_text_ms: t.timings.first_text_ms,
+            first_audio_ms: audio,
+            total_ms: t.timings.total_ms,
+            tokens_in: t.usage.0,
+            tokens_out: t.usage.1,
+            tools: t
+                .timings
+                .tools
+                .iter()
+                .map(|(name, ms, ok)| markon_memory::traces::ToolTime {
+                    name: name.clone(),
+                    ms: *ms,
+                    ok: *ok,
+                })
+                .collect(),
+            ok: !t.partial,
+            ..Default::default()
+        });
+    }
+
     fn persist_turn(&self, t: &markon_agent::TurnSummary) {
+        self.record_trace(t);
         let Some(cv) = *self.conv.lock().expect("conv") else {
             return;
         };

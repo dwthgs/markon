@@ -42,6 +42,18 @@ export interface SettingsView {
     skills: { name: string; description: string; trust: 'bundled' | 'yours' | 'unreviewed' }[];
     skill_problems: string[];
   };
+  traces: {
+    id: number;
+    user_text: string;
+    model: string;
+    stt_ms: number | null;
+    first_text_ms: number | null;
+    first_audio_ms: number | null;
+    total_ms: number;
+    tools: { name: string; ms: number; ok: boolean }[];
+    ok: boolean;
+  }[];
+  proposals: { path: string; diff: string }[];
   sources: {
     full_disk_access: boolean;
     github_token: boolean;

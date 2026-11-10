@@ -331,6 +331,7 @@ mod tests {
                 usage: (1, 1),
                 provider: "fake".into(),
                 model: "fake".into(),
+                timings: Default::default(),
             }),
             "",
         );

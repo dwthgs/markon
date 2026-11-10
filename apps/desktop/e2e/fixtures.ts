@@ -65,6 +65,25 @@ export const settingsView = {
     ],
     skill_problems: [],
   },
+  traces: [
+    {
+      id: 2,
+      user_text: 'what did I miss',
+      model: 'claude-opus-5-5',
+      stt_ms: 350,
+      first_text_ms: 1200,
+      first_audio_ms: 1500,
+      total_ms: 4100,
+      tools: [{ name: 'what_did_i_miss', ms: 1800, ok: true }],
+      ok: true,
+    },
+  ],
+  proposals: [
+    {
+      path: '/Users/me/.markon/agents/standup.toml',
+      diff: '  name = "Standup"\n- prompt = "old"\n+ prompt = "new"',
+    },
+  ],
   sources: {
     full_disk_access: false,
     github_token: false,

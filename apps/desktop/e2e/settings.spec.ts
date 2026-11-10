@@ -164,3 +164,15 @@ test('the folders section says how much is indexed and offers meaning search', a
   await panel.getByRole('button', { name: 'Add meaning search (23 MB)' }).click();
   expect(await calls(page, 'download_embedder')).toHaveLength(1);
 });
+
+test('where the time went, and a proposed change that waits for a yes', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  const row = panel.getByRole('row', { name: /what did I miss/ });
+  await expect(row).toContainText('350 ms');
+  await expect(row).toContainText('4.1 s');
+  await expect(panel).toContainText('+ prompt = "new"');
+  await panel.getByRole('button', { name: 'Approve change' }).click();
+  expect(await calls(page, 'approve_proposal')).toEqual([{ path: '/Users/me/.markon/agents/standup.toml' }]);
+  await panel.getByRole('button', { name: 'Suggest improvements' }).click();
+  expect(await calls(page, 'suggest_improvements')).toHaveLength(1);
+});

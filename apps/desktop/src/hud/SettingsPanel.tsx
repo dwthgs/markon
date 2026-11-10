@@ -4,6 +4,7 @@ import { call } from '@/lib/tauri';
 import { AutomationSection } from './AutomationSection';
 import { KeyField } from './KeyField';
 import { SourcesSection } from './SourcesSection';
+import { TimeSection } from './TimeSection';
 
 const nf = new Intl.NumberFormat('en-US');
 
@@ -282,6 +283,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             </li>
           ))}
         </ul>
+      </Section>
+
+      <Section title="WHERE THE TIME WENT">
+        <TimeSection view={view} reload={reload} attempt={attempt} />
       </Section>
 
       <Section title="USAGE TODAY">

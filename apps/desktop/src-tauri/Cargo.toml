@@ -28,6 +28,7 @@ markon-memory = { path = "../../../crates/memory" }
 markon-scheduler = { path = "../../../crates/scheduler" }
 markon-sources = { path = "../../../crates/sources" }
 markon-llm = { path = "../../../crates/llm" }
+markon-hands = { path = "../../../crates/hands" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [lints]
