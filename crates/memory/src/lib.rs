@@ -470,6 +470,14 @@ impl Memory {
         Ok(())
     }
 
+    pub fn preference(&self, key: &str) -> Result<Option<Value>> {
+        let v: Option<String> = self
+            .db()
+            .query_row("SELECT value_json FROM preferences WHERE key=?1", [key], |r| r.get(0))
+            .optional()?;
+        Ok(v.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
     /// Run `f` with the connection (used by the scheduler for the schedules table).
     pub fn with<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T> {
         Ok(f(&self.db())?)
