@@ -18,7 +18,11 @@ test.beforeEach(async ({ page }) => {
     pick_folder: '/Users/me/Work',
     export_memory: '/Users/me/.markon/markon-export-1.json',
   });
-  await page.evaluate(() => window.__e2e.emit('markon://menu', 'settings'));
+  // The app subscribes to events a moment after it mounts, so an early emit can be lost. Opening twice is harmless.
+  await expect(async () => {
+    await page.evaluate(() => window.__e2e.emit('markon://menu', 'settings'));
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible({ timeout: 1000 });
+  }).toPass();
 });
 
 test('Cmd+, opens settings in the HUD and Esc closes it', async ({ page }) => {

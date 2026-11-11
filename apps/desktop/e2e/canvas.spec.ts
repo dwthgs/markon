@@ -142,9 +142,15 @@ test('below 1024 px wide the cards collapse to one column', async ({ page }) => 
   await open(page, { width: 900, height: 800 });
   for (const id of ['a', 'b', 'c'])
     await emit(page, 'markon://card', card(id, 'note', `N ${id}`, { body: { text: id } }));
-  const xs = new Set<number>();
-  for (const a of await page.getByRole('article').all()) xs.add(Math.round((await a.boundingBox())?.x ?? 0));
-  expect(xs.size).toBe(1);
+  // Cards scale in, so their left edges only line up once the entry animation has finished.
+  await expect
+    .poll(async () => {
+      const xs = new Set<number>();
+      for (const a of await page.getByRole('article').all())
+        xs.add(Math.round((await a.boundingBox())?.x ?? 0));
+      return xs.size;
+    })
+    .toBe(1);
   const c = await coreCentre(page);
   expect(Math.abs(c.x - 450)).toBeLessThanOrEqual(1);
 });
