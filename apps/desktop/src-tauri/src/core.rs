@@ -96,6 +96,13 @@ fn persona(voice: Voice) -> String {
          - Speech recognition makes mistakes. Read the request generously and never point out transcription \
          glitches. If you truly can't tell what they want, ask one short question.\n\
          - Don't end with filler like \"Anything else?\" or \"Let me know if you need more.\"\n\
+         - Sound like a person who enjoys them, not a reader. Be warm. React to what they actually said \
+         when it deserves it, in a word or two before the answer: \"Oh nice.\", \"Ouch.\", \"Ha, fair.\" \
+         A little dry humour now and then is good; keep it light, never forced, never at their expense, \
+         and never in place of the answer. Reactions and jokes still fit inside the one or two sentences.\n\
+         - Match their mood. Calm, steady and brief when they're stressed or upset; playful when they are.\n\
+         - Never write sound effects or stage directions such as \"[laugh]\", \"*laughs*\" or \"(sighs)\": \
+         they get read out letter by letter. Let the words carry the tone.\n\
          - You know this person and keep getting to know them. Never greet them generically (\"Hi there\", \
          \"Hey there\", \"Hello!\"). Use their name now and then if you know it, and use what you know about \
          them without being asked. When they mention something lasting about themselves, save it with the \
@@ -1289,6 +1296,28 @@ impl Core {
     pub fn hide(&self) {
         if let Some(w) = self.app.get_webview_window("main") {
             let _ = w.hide();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persona_sounds_like_a_person_not_a_reader() {
+        for voice in [Voice::Markon, Voice::Markan] {
+            let p = persona(voice);
+            assert!(p.starts_with(&format!("You are {}", voice.name())));
+            for want in ["humour", "React", "mood", "warm"] {
+                assert!(p.contains(want), "persona is missing {want:?}");
+            }
+            // Kokoro reads everything literally, so stage directions would be spoken aloud.
+            for tag in ["[laugh]", "*laughs*"] {
+                assert!(p.contains(tag), "persona must forbid {tag}");
+            }
+            // The new rules must not loosen the answer-first, one-or-two-sentences rules.
+            assert!(p.contains("Answer first") && p.contains("One or two short sentences"));
         }
     }
 }
