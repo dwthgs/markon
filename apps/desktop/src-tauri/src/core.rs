@@ -67,6 +67,10 @@ pub struct Core {
     media_started: Arc<AtomicBool>,
     /// The spoken answer to the wake phrase is playing: listen when it ends, music or not.
     wake_ack: AtomicBool,
+    /// Spoken progress during long turns with tools.
+    progress: Mutex<markon_agent::progress::Progress>,
+    /// The user is talking: no progress line over them.
+    user_speaking: AtomicBool,
     models_ready: AtomicBool,
     model_note: Mutex<String>,
     ptt: Mutex<crate::ptt::Ptt>,
@@ -538,6 +542,8 @@ impl Core {
             turn_done: AtomicBool::new(true),
             media_started,
             wake_ack: AtomicBool::new(false),
+            progress: Default::default(),
+            user_speaking: AtomicBool::new(false),
             models_ready: AtomicBool::new(false),
             model_note: Mutex::new("Checking speech models".into()),
             ptt: Mutex::new(crate::ptt::Ptt::default()),
@@ -550,6 +556,14 @@ impl Core {
             while let Some(e) = rx.recv().await {
                 c.on_agent(&e);
                 let _ = c.app.emit(EV_AGENT, &e);
+            }
+        });
+        let c = core.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+            loop {
+                tick.tick().await;
+                c.progress_tick();
             }
         });
         let c = core.clone();
@@ -681,7 +695,28 @@ impl Core {
         }
     }
 
+    /// Say a short progress line when one is due. Quiet while the user talks, while media is
+    /// starting, for card-only deliveries, and while Markon is already speaking.
+    fn progress_tick(&self) {
+        let quiet = self.user_speaking.load(Ordering::SeqCst)
+            || self.media_started.load(Ordering::SeqCst)
+            || self.muted.load(Ordering::SeqCst)
+            || self.audio.is_speaking();
+        let line = self
+            .progress
+            .lock()
+            .expect("progress")
+            .due(Instant::now(), quiet);
+        if let Some(line) = line {
+            let _ = self.audio.speak(line);
+        }
+    }
+
     fn on_agent(&self, e: &AgentEvent) {
+        self.progress
+            .lock()
+            .expect("progress")
+            .on_event(e, Instant::now());
         let user = self.last_user.lock().map(|u| u.clone()).unwrap_or_default();
         self.turn_cards.on_agent(e, &user);
         match e {
@@ -820,6 +855,14 @@ impl Core {
                     }
                 });
             }
+            // A progress line ended while the turn is still working.
+            AudioEvent::PlaybackEnded
+                if !self.turn_done.load(Ordering::SeqCst)
+                    && !self.reply_started.load(Ordering::SeqCst)
+                    && !self.audio.is_speaking() =>
+            {
+                self.agent.set_state(AgentState::Thinking);
+            }
             AudioEvent::Wake { rest } => {
                 let c = self.clone();
                 if crate::ptt::is_stop(rest) {
@@ -869,8 +912,12 @@ impl Core {
                     });
                 }
             }
-            AudioEvent::SpeechStarted => self.ptt.lock().expect("ptt").speech_started(),
+            AudioEvent::SpeechStarted => {
+                self.user_speaking.store(true, Ordering::SeqCst);
+                self.ptt.lock().expect("ptt").speech_started()
+            }
             AudioEvent::SpeechEnded => {
+                self.user_speaking.store(false, Ordering::SeqCst);
                 let action = self.ptt.lock().expect("ptt").speech_ended();
                 self.ptt_act(action);
             }

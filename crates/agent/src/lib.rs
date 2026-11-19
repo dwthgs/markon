@@ -1,6 +1,7 @@
 //! The agent loop: build the prompt from sections, stream the model, run tool calls in
 //! parallel, and keep the Idle → Listening → Thinking → Speaking → Idle state machine honest.
 pub mod loop_guard;
+pub mod progress;
 pub mod scrub;
 
 use markon_provider::*;
