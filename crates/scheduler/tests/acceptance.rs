@@ -309,3 +309,91 @@ async fn an_improvement_is_proposed_beside_the_original_and_applied_only_on_yes(
         None
     );
 }
+
+/// The bundled morning briefing, scheduled and run like any agent, cannot call a tool off its
+/// list: the model is not offered it, and a call to it is refused before it reaches the runtime.
+#[tokio::test]
+async fn the_morning_briefing_cannot_call_a_tool_off_its_list() {
+    use markon_agent::{Agent, AgentConfig, AgentEvent, ToolCall, ToolRuntime, UserTurn};
+    use markon_provider::fake::FakeProvider;
+    use markon_scheduler::{BUNDLED, files};
+    struct Tools(std::sync::Mutex<Vec<String>>);
+    impl ToolRuntime for Tools {
+        fn specs(&self) -> Vec<markon_provider::ToolSpec> {
+            [
+                "what_did_i_miss",
+                "fetch_page",
+                "remind_me",
+                "send_imessage",
+                "run_command",
+                "quit_app",
+            ]
+            .iter()
+            .map(|n| markon_provider::ToolSpec {
+                name: (*n).into(),
+                description: String::new(),
+                input_schema: serde_json::json!({"type": "object"}),
+            })
+            .collect()
+        }
+        fn call(&self, c: ToolCall) -> markon_provider::BoxFuture<'static, Result<String, String>> {
+            self.0.lock().unwrap().push(c.name);
+            Box::pin(async { Ok("ran".into()) })
+        }
+    }
+    let dir = tmp("briefing-allow-list");
+    files::install_bundled(&dir, BUNDLED).unwrap();
+    let s = Scheduler::new(Arc::new(Memory::open_in_memory().unwrap()));
+    let (agents, _) = files::load_dir(&dir);
+    s.sync_files(
+        &agents.into_iter().map(|(_, f)| f).collect::<Vec<_>>(),
+        at(6, 0, 10),
+    )
+    .unwrap();
+    let due = s.take_due(at(7, 30, 10)).unwrap();
+    let briefing = due
+        .iter()
+        .find(|d| d.name == "Morning briefing")
+        .expect("the briefing is due at 07:30");
+    let fake = Arc::new(FakeProvider::new(vec![
+        FakeProvider::tools(&[
+            ("1", "what_did_i_miss", serde_json::json!({})),
+            (
+                "2",
+                "send_imessage",
+                serde_json::json!({"to": "everyone", "text": "hi"}),
+            ),
+            ("3", "quit_app", serde_json::json!({"name": "Mail"})),
+        ]),
+        FakeProvider::text("Good morning."),
+    ]));
+    let tools = Arc::new(Tools(Default::default()));
+    let (agent, mut rx) = Agent::new(fake.clone(), tools.clone(), AgentConfig::default());
+    let spec = &briefing.agent;
+    agent
+        .submit(UserTurn::agent(
+            &spec.prompt,
+            spec.tools.clone(),
+            spec.max_rounds,
+        ))
+        .await;
+    let mut refused = Vec::new();
+    while let Ok(Some(e)) =
+        tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+    {
+        if let AgentEvent::ToolCallFinished {
+            name, ok: false, ..
+        } = e
+        {
+            refused.push(name);
+        }
+    }
+    assert_eq!(*tools.0.lock().unwrap(), ["what_did_i_miss"]);
+    assert_eq!(refused, ["send_imessage", "quit_app"]);
+    let offered: Vec<String> = fake.requests.lock().unwrap()[0]
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert_eq!(offered, ["what_did_i_miss", "fetch_page", "remind_me"]);
+}
