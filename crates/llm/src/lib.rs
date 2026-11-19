@@ -10,6 +10,8 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
+use markon_provider::text_tools::tools_prompt;
+pub use markon_provider::text_tools::{parse_calls, speakable};
 use markon_provider::*;
 use serde_json::{Value, json};
 use std::num::NonZeroU32;
@@ -25,22 +27,7 @@ const BATCH: usize = 512;
 pub fn chatml(req: &ChatRequest) -> String {
     let mut s = format!("<|im_start|>system\n{}", req.system.trim());
     if !req.tools.is_empty() {
-        s.push_str(
-            "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n\
-             You are provided with function signatures within <tools></tools> XML tags:\n<tools>",
-        );
-        for t in &req.tools {
-            s.push('\n');
-            s.push_str(
-                &json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.input_schema}})
-                    .to_string(),
-            );
-        }
-        s.push_str(
-            "\n</tools>\n\nFor each function call, return a json object with function name and arguments \
-             within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": \
-             <args-json-object>}\n</tool_call>",
-        );
+        s.push_str(&tools_prompt(&req.tools));
     }
     s.push_str("<|im_end|>\n");
     for m in &req.messages {
@@ -84,45 +71,6 @@ pub fn chatml(req: &ChatRequest) -> String {
     }
     s.push_str("<|im_start|>assistant\n");
     s
-}
-
-/// Split what the model wrote into spoken text and tool calls.
-pub fn parse_calls(out: &str) -> (String, Vec<(String, Value)>) {
-    let mut text = String::new();
-    let mut calls = Vec::new();
-    let mut rest = out;
-    while let Some(start) = rest.find("<tool_call>") {
-        text.push_str(&rest[..start]);
-        let after = &rest[start + "<tool_call>".len()..];
-        let end = after.find("</tool_call>").unwrap_or(after.len());
-        if let Ok(v) = serde_json::from_str::<Value>(after[..end].trim())
-            && let Some(name) = v["name"].as_str()
-        {
-            let args = match &v["arguments"] {
-                Value::String(s) => serde_json::from_str(s).unwrap_or(json!({})),
-                Value::Null => json!({}),
-                a => a.clone(),
-            };
-            calls.push((name.to_string(), args));
-        }
-        rest = after.get(end + "</tool_call>".len()..).unwrap_or("");
-    }
-    text.push_str(rest);
-    (text.trim().to_string(), calls)
-}
-
-/// How much of `buf` is safe to speak now: everything except a tail that could be the start of a
-/// `<tool_call>` tag, and nothing once a tag has begun.
-pub fn speakable(buf: &str) -> usize {
-    if let Some(i) = buf.find("<tool_call>") {
-        return i;
-    }
-    let tag = "<tool_call>";
-    (1..tag.len())
-        .rev()
-        .find(|n| buf.ends_with(&tag[..*n]))
-        .map(|n| buf.len() - n)
-        .unwrap_or(buf.len())
 }
 
 fn backend() -> Result<&'static LlamaBackend, ProviderError> {

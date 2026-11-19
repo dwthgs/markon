@@ -8,11 +8,13 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub mod anthropic;
+pub mod claude_code;
 pub mod fake;
 pub mod local;
 pub mod openrouter;
 pub mod relay;
 pub mod sse;
+pub mod text_tools;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -185,7 +187,7 @@ pub type DeltaStream = mpsc::Receiver<Result<ChatDelta, ProviderError>>;
 pub type KeySource = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
 pub trait ModelProvider: Send + Sync {
-    /// Short route id: "anthropic", "openrouter", "relay", "fake".
+    /// Short route id: "anthropic", "openrouter", "relay", "claudecode", "fake".
     fn route(&self) -> &'static str;
     fn stream(&self, req: ChatRequest) -> DeltaStream;
     fn models(&self) -> Vec<ModelInfo>;
