@@ -282,11 +282,12 @@ async fn the_front_window_moves_to_simple_layouts() {
             "apps set_window Safari 0,33,756,949"
         ]
     );
-    // What undo needs: the window's frame before the move.
+    // What undo needs, the window's frame before the move, is kept for the activity log.
     assert_eq!(
-        r.last_card().body["undo"],
-        json!({"kind": "window", "app": "Safari", "frame": [100, 100, 800, 600]})
+        r.rt.take_undo("1"),
+        Some(json!({"kind": "window", "app": "Safari", "frame": [100, 100, 800, 600]}))
     );
+    assert!(r.last_card().body.get("undo").is_none());
     let err =
         r.rt.call(call("2", "arrange_window", json!({"layout": "diagonal"})))
             .await

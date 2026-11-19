@@ -448,39 +448,44 @@ impl Core {
             });
         let (mut agent, mut rx) = Agent::new(
             provider,
-            Arc::new(markon_hands::WithHands {
-                browser,
-                perms: tools.perms.clone(),
-                cards: card_sink.clone(),
-                refs: Default::default(),
-                inner: crate::remember::WithMemory {
-                    inner: markon_sources::search::WithSearch {
-                        inner: markon_sources::act::WithActions {
-                            inner: markon_sources::tool::WithSources {
-                                inner: markon_tools::skills::WithSkills {
-                                    inner: markon_scheduler::reminders::WithReminders {
-                                        inner: workspace::shared(&tools),
-                                        reminders: reminders.clone(),
+            // The activity log sees every tool call, whichever wrapper runs it.
+            Arc::new(markon_tools::activity::WithActivity {
+                rt: tools.clone(),
+                memory: memory.clone(),
+                inner: markon_hands::WithHands {
+                    browser,
+                    perms: tools.perms.clone(),
+                    cards: card_sink.clone(),
+                    refs: Default::default(),
+                    inner: crate::remember::WithMemory {
+                        inner: markon_sources::search::WithSearch {
+                            inner: markon_sources::act::WithActions {
+                                inner: markon_sources::tool::WithSources {
+                                    inner: markon_tools::skills::WithSkills {
+                                        inner: markon_scheduler::reminders::WithReminders {
+                                            inner: workspace::shared(&tools),
+                                            reminders: reminders.clone(),
+                                        },
+                                        library: skills.clone(),
+                                        perms: tools.perms.clone(),
                                     },
-                                    library: skills.clone(),
-                                    perms: tools.perms.clone(),
+                                    sources: sources.clone(),
+                                    cards: card_sink.clone(),
+                                    memory: memory.clone(),
+                                    private: private.clone(),
+                                    embed: embed.clone(),
                                 },
-                                sources: sources.clone(),
+                                accounts: accounts.clone(),
+                                outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
+                                perms: tools.perms.clone(),
                                 cards: card_sink.clone(),
                                 memory: memory.clone(),
-                                private: private.clone(),
-                                embed: embed.clone(),
                             },
-                            accounts: accounts.clone(),
-                            outbox: Arc::new(crate::sources::MacOutbox(platform.clone())),
-                            perms: tools.perms.clone(),
-                            cards: card_sink.clone(),
                             memory: memory.clone(),
+                            embed: embed.clone(),
                         },
-                        memory: memory.clone(),
-                        embed: embed.clone(),
+                        pending: pending_facts.clone(),
                     },
-                    pending: pending_facts.clone(),
                 },
             }),
             AgentConfig {

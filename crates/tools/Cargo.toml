@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 markon-agent = { path = "../agent" }
+markon-memory = { path = "../memory" }
 markon-platform = { path = "../platform" }
 markon-provider = { path = "../provider" }
 rmcp = { workspace = true, default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth"] }

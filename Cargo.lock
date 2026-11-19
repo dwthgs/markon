@@ -3379,6 +3379,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "markon-agent",
+ "markon-memory",
  "markon-platform",
  "markon-provider",
  "pdf-extract",

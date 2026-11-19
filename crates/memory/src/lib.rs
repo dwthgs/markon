@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod activity;
 pub mod index;
 pub mod traces;
 
@@ -16,6 +17,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_index_and_people.sql"),
     include_str!("../migrations/003_traces.sql"),
+    include_str!("../migrations/004_activity.sql"),
 ];
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -531,7 +533,7 @@ impl Memory {
     pub fn wipe(&self) -> Result<()> {
         self.db().execute_batch(
             "DELETE FROM cards; DELETE FROM tool_calls; DELETE FROM facts; DELETE FROM turns; DELETE FROM conversations;
-             DELETE FROM preferences; DELETE FROM usage; DELETE FROM chunks; DELETE FROM traces; DELETE FROM identities; DELETE FROM people;
+             DELETE FROM preferences; DELETE FROM usage; DELETE FROM chunks; DELETE FROM traces; DELETE FROM activity; DELETE FROM identities; DELETE FROM people;
              INSERT INTO facts_fts(facts_fts) VALUES('rebuild'); INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
              INSERT INTO turns_fts(turns_fts) VALUES('rebuild'); VACUUM;",
         )?;

@@ -1,5 +1,6 @@
 //! Tool runtime: native tools and MCP servers behind one list, run under permission
 //! tiers, each call reported as a canvas card.
+pub mod activity;
 pub mod cards;
 pub mod guard;
 pub mod mac;
@@ -34,6 +35,8 @@ pub struct Runtime {
     pub cache_dir: PathBuf,
     /// What the last `read_app` numbered, and a stopped turn.
     ax: std::sync::Mutex<mac::AxState>,
+    /// What undo needs, by tool call id, until the activity log takes it.
+    undo: std::sync::Mutex<std::collections::HashMap<String, Value>>,
     /// The user keeps the screen private: screenshots stay on the card.
     pub screen_private: std::sync::atomic::AtomicBool,
     /// Test hook: lets `fetch_page` reach a local mock server. Never set in the app.
@@ -109,6 +112,7 @@ impl Runtime {
             cache_dir: std::env::temp_dir().join("markon-cache"),
             ax: Default::default(),
             screen_private: Default::default(),
+            undo: Default::default(),
             allow_private_hosts: false,
         }
     }
@@ -117,6 +121,11 @@ impl Runtime {
     pub fn with_platform(mut self, platform: Arc<dyn Platform>) -> Self {
         self.platform = platform;
         self
+    }
+
+    /// What undoing call `id` needs, once (the activity log takes it).
+    pub fn take_undo(&self, id: &str) -> Option<Value> {
+        self.undo.lock().expect("undo").remove(id)
     }
 
     pub fn set_mcp(&self, servers: Vec<Arc<mcp::McpServer>>) {
@@ -245,10 +254,22 @@ impl Runtime {
                 if let Some(parent) = p.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| failed(e.to_string()))?;
                 }
+                // Undo keeps the text it replaces; a secret, binary or large file cannot be undone.
+                let previous = match std::fs::metadata(&p) {
+                    Err(_) => Some(Value::Null),
+                    Ok(m) if m.len() <= MAX_FILE && !guard::is_secret_file(&p) => {
+                        std::fs::read_to_string(&p).ok().map(Value::String)
+                    }
+                    Ok(_) => None,
+                };
                 std::fs::write(&p, content).map_err(|e| failed(e.to_string()))?;
+                let mut card = json!({"path": p, "bytes": content.len(), "preview": content});
+                if let Some(prev) = previous {
+                    card["undo"] = json!({"kind": "file", "path": p, "previous": prev});
+                }
                 Ok(Outcome {
                     model: format!("Wrote {} bytes to {}", content.len(), p.display()),
-                    card: json!({"path": p, "bytes": content.len(), "preview": content}),
+                    card,
                 })
             }
             "open_url" => {
@@ -556,7 +577,11 @@ impl Runtime {
             self.run_native(&c).await
         };
         match r {
-            Ok(o) => {
+            Ok(mut o) => {
+                // What undo needs stays off the card, for the activity log.
+                if let Some(u) = o.card.as_object_mut().and_then(|m| m.remove("undo")) {
+                    self.undo.lock().expect("undo").insert(c.id.clone(), u);
+                }
                 // Media tools decide the card's kind and title from what they found.
                 let mut card = card;
                 if let Some(k) = o
