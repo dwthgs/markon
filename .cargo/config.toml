@@ -1,0 +1,3 @@
+# Dev builds are signed before they run, so the keychain grant survives a rebuild (scripts/dev-sign.sh).
+[target.aarch64-apple-darwin]
+runner = "scripts/dev-sign.sh"
