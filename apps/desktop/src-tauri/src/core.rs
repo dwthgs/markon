@@ -416,6 +416,7 @@ impl Core {
             card_sink.clone(),
         );
         workspace::start_mcp(tools.clone(), &dir.join("mcp.json"), platform.clone());
+        crate::sources::set_screen_private(&tools, &settings.sources.private);
         let provider = provider_for(&settings, platform.clone());
         let pending_facts = crate::remember::PendingFacts::default();
         let servers = tools.mcp.read().map(|m| m.clone()).unwrap_or_default();

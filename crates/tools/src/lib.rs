@@ -2,6 +2,7 @@
 //! tiers, each call reported as a canvas card.
 pub mod cards;
 pub mod guard;
+pub mod mac;
 pub mod mcp;
 pub mod media;
 pub mod native;
@@ -31,11 +32,15 @@ pub struct Runtime {
     pub mcp: RwLock<Vec<Arc<mcp::McpServer>>>,
     http: reqwest::Client,
     pub cache_dir: PathBuf,
+    /// What the last `read_app` numbered, and a stopped turn.
+    ax: std::sync::Mutex<mac::AxState>,
+    /// The user keeps the screen private: screenshots stay on the card.
+    pub screen_private: std::sync::atomic::AtomicBool,
     /// Test hook: lets `fetch_page` reach a local mock server. Never set in the app.
     pub allow_private_hosts: bool,
 }
 
-struct Outcome {
+pub(crate) struct Outcome {
     model: String,
     card: Value,
 }
@@ -44,6 +49,7 @@ fn kind_of(name: &str) -> CardKind {
     match name {
         "list_files" | "read_file" | "write_file" => CardKind::File,
         "fetch_page" => CardKind::Page,
+        "look_at_screen" => CardKind::Image,
         "show_image" => CardKind::Image,
         "play_media" => CardKind::Video,
         "spotify" => CardKind::Music,
@@ -56,9 +62,18 @@ fn title_of(c: &ToolCall) -> String {
     match c.name.as_str() {
         "list_files" | "read_file" | "write_file" => s("path"),
         "fetch_page" | "open_url" => s("url"),
-        "open_app" => s("name"),
+        "open_app" | "focus_app" | "quit_app" => s("name"),
+        "list_apps" => "Running apps".into(),
+        "arrange_window" => format!("Window: {}", s("layout")),
+        "read_app" => format!(
+            "Read {}",
+            c.input["app"].as_str().unwrap_or("the front app")
+        ),
+        "click_in_app" => format!("Click [{}]", c.input["ref"]),
+        "type_in_app" => format!("Type into [{}]", c.input["ref"]),
+        "press_keys" => format!("Press {}", s("keys")),
         "run_command" => s("command"),
-        "screenshot_window" => "Window screenshot".into(),
+        "look_at_screen" => "Your screen".into(),
         "show_image" => c.input["caption"]
             .as_str()
             .or(c.input["query"].as_str())
@@ -70,6 +85,9 @@ fn title_of(c: &ToolCall) -> String {
             .unwrap_or("Media")
             .to_string(),
         "spotify" => "Spotify".into(),
+        "list_shortcuts" => "Shortcuts".into(),
+        "run_shortcut" => format!("Shortcut: {}", s("name")),
+        "system_control" => format!("Mac: {}", s("action").replace('_', " ")),
         other => other.replace("__", " · "),
     }
 }
@@ -89,8 +107,16 @@ impl Runtime {
                 .build()
                 .expect("http client"),
             cache_dir: std::env::temp_dir().join("markon-cache"),
+            ax: Default::default(),
+            screen_private: Default::default(),
             allow_private_hosts: false,
         }
+    }
+
+    /// Tests drive a fake Mac (`markon_platform::fake::FakeMac`).
+    pub fn with_platform(mut self, platform: Arc<dyn Platform>) -> Self {
+        self.platform = platform;
+        self
     }
 
     pub fn set_mcp(&self, servers: Vec<Arc<mcp::McpServer>>) {
@@ -272,28 +298,6 @@ impl Runtime {
                     Err(failed(format!("exit {code}\n{text}")))
                 }
             }
-            "screenshot_window" => {
-                self.perms
-                    .execute(&c.name, "Take a screenshot of the window you click")
-                    .await
-                    .map_err(blocked)?;
-                std::fs::create_dir_all(&self.cache_dir).map_err(|e| failed(e.to_string()))?;
-                let path = self.cache_dir.join(format!("shot-{}.png", cards::now_ms()));
-                let ok = tokio::process::Command::new("/usr/sbin/screencapture")
-                    .args(["-iWo"])
-                    .arg(&path)
-                    .status()
-                    .await
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                if !ok || !path.exists() {
-                    return Err(failed("no window was captured".into()));
-                }
-                Ok(Outcome {
-                    model: format!("Saved a screenshot to {}", path.display()),
-                    card: json!({"path": path}),
-                })
-            }
             "fetch_page" => {
                 let url = Self::arg(input, "url").map_err(failed)?;
                 let (url, title, text) = self
@@ -396,6 +400,7 @@ impl Runtime {
                         "position_s": np.position_s, "duration_s": np.duration_s}),
                 })
             }
+            other if mac::NAMES.contains(&other) => self.run_mac(c).await,
             other => Err(failed(format!("unknown tool {other}"))),
         }
     }
@@ -496,6 +501,7 @@ pub struct Shared(pub Arc<Runtime>);
 impl ToolRuntime for Shared {
     fn specs(&self) -> Vec<ToolSpec> {
         let mut v = native::specs();
+        v.extend(mac::specs());
         for s in self.0.mcp.read().expect("mcp").iter() {
             v.extend(s.specs());
         }
@@ -577,7 +583,11 @@ impl Runtime {
                 } else {
                     CardStatus::Error
                 };
-                (self.cards)(card.with(status, json!({"tool": c.name, "reason": reason})));
+                let mut body = json!({"tool": c.name, "reason": reason});
+                if let Some(p) = mac::permission_in(&reason) {
+                    body["needs_permission"] = p.id().into();
+                }
+                (self.cards)(card.with(status, body));
                 Err(reason)
             }
         }

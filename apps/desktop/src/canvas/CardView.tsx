@@ -150,6 +150,15 @@ function Body({ card }: { card: Card }) {
         <>
           {b.command ? <p className="mb-1 text-white/85">$ {b.command}</p> : null}
           <pre className="whitespace-pre-wrap">{b.preview ?? b.action ?? b.reason ?? ''}</pre>
+          {b.needs_permission ? (
+            <button
+              type="button"
+              className="hud-btn mt-2"
+              onClick={() => void call('open_permission_settings', { permission: b.needs_permission })}
+            >
+              Open {b.needs_permission === 'screen_recording' ? 'Screen Recording' : 'Accessibility'} settings
+            </button>
+          ) : null}
         </>
       );
   }

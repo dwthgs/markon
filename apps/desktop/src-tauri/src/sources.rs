@@ -164,6 +164,14 @@ pub fn build(
     v
 }
 
+/// "Screen private": screenshots stay on the card and never reach the model.
+pub fn set_screen_private(tools: &markon_tools::Runtime, private: &[String]) {
+    tools.screen_private.store(
+        private.iter().any(|p| p == "screen"),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+}
+
 /// Rebuild the live list after a settings change.
 pub fn refresh(core: &crate::core::Core) {
     let s = core.settings.lock().expect("settings").sources.clone();
@@ -171,6 +179,7 @@ pub fn refresh(core: &crate::core::Core) {
     let tg = core.telegram.lock().expect("telegram").clone();
     *core.sources.write().expect("sources") = build(&s, &core.platform, &servers, tg.clone());
     *core.accounts.write().expect("accounts") = accounts(&s, &core.platform, &servers, tg);
+    set_screen_private(&core.tools, &s.private);
     let settings = core.settings.lock().expect("settings").clone();
     *core.private.write().expect("private") =
         crate::core::private_route(&settings, &core.dir.join("models"));
@@ -290,6 +299,19 @@ pub fn view(core: &crate::core::Core) -> Value {
 pub fn open_full_disk_access(core: State<'_, CoreState>) -> Result<(), String> {
     core.platform
         .open_full_disk_access_settings()
+        .map_err(|e| e.to_string())
+}
+
+/// The privacy pane for a permission a card asked for: `accessibility` or `screen_recording`.
+#[tauri::command]
+pub fn open_permission_settings(
+    core: State<'_, CoreState>,
+    permission: String,
+) -> Result<(), String> {
+    let p = markon_platform::Permission::from_id(&permission)
+        .ok_or_else(|| format!("unknown permission {permission}"))?;
+    core.platform
+        .open_permission_settings(p)
         .map_err(|e| e.to_string())
 }
 

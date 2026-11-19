@@ -192,6 +192,25 @@ pub fn is_secret_file(path: &Path) -> bool {
     candidates.iter().any(|c| secret_path(c))
 }
 
+/// Words that suggest the model is being asked to enter a secret into a field (a web page, or
+/// any app), or a 13-or-more-digit number anywhere.
+pub fn looks_secret(field_line: &str, text: &str) -> bool {
+    let f = field_line.to_lowercase();
+    [
+        "password",
+        "passcode",
+        "card number",
+        "cvc",
+        "cvv",
+        "security code",
+        "one-time",
+        "otp",
+    ]
+    .iter()
+    .any(|w| f.contains(w))
+        || (text.len() >= 13 && text.chars().filter(char::is_ascii_digit).count() >= 13)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

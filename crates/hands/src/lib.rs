@@ -97,24 +97,6 @@ fn names() -> Vec<String> {
     v
 }
 
-/// Words that suggest the model is being asked to enter a secret on a page.
-fn looks_secret(field_line: &str, text: &str) -> bool {
-    let f = field_line.to_lowercase();
-    [
-        "password",
-        "passcode",
-        "card number",
-        "cvc",
-        "cvv",
-        "security code",
-        "one-time",
-        "otp",
-    ]
-    .iter()
-    .any(|w| f.contains(w))
-        || (text.len() >= 13 && text.chars().filter(char::is_ascii_digit).count() >= 13)
-}
-
 impl<T: ToolRuntime> ToolRuntime for WithHands<T> {
     fn specs(&self) -> Vec<ToolSpec> {
         let mut v = self.inner.specs();
@@ -202,7 +184,7 @@ impl<T: ToolRuntime> ToolRuntime for WithHands<T> {
                     let n = c.input["ref"].as_u64().unwrap_or(0);
                     let (_, line) = lookup(n)?;
                     let text = c.input["text"].as_str().unwrap_or("").to_string();
-                    if looks_secret(&line, &text) {
+                    if markon_tools::guard::looks_secret(&line, &text) {
                         return Err("that looks like a password or card field: Markon never types those; ask the user to type it themselves".into());
                     }
                     (

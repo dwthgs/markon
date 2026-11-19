@@ -3211,6 +3211,7 @@ dependencies = [
 name = "markon-agent"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "markon-provider",
  "regex",
  "serde",
@@ -3267,6 +3268,7 @@ dependencies = [
  "markon-agent",
  "markon-platform",
  "markon-provider",
+ "markon-tools",
  "serde",
  "serde_json",
  "tokio",

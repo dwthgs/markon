@@ -89,8 +89,83 @@ pub fn reads_outside(name: &str) -> bool {
             "read_pdf",
             "list_drafts",
             "research",
+            // Other apps' windows, a shortcut's output and the screen are someone else's words too.
+            "read_app",
+            "run_shortcut",
+            SCREEN_TOOL,
         ]
         .contains(&name)
+}
+
+/// The tool whose result carries a picture of the screen.
+pub const SCREEN_TOOL: &str = "look_at_screen";
+const SCREEN_MARK: &str = "<screenshot path=\"";
+
+/// The first line of a `look_at_screen` result that carries a picture.
+pub fn screenshot_marker(path: &std::path::Path) -> String {
+    format!("{SCREEN_MARK}{}\"/>", path.display())
+}
+
+/// The picture in a `look_at_screen` result: an absolute `.jpg` path on its first line, nothing else.
+pub fn screenshot_path(result: &str) -> Option<std::path::PathBuf> {
+    let rest = result.strip_prefix(SCREEN_MARK)?;
+    let p = std::path::PathBuf::from(&rest[..rest.find("\"/>")?]);
+    (p.is_absolute() && p.extension().is_some_and(|e| e == "jpg")).then_some(p)
+}
+
+/// Routes whose messages are Anthropic's shape, which takes images in tool results.
+fn sees_images(route: &str) -> bool {
+    matches!(route, "anthropic" | "relay" | "fake")
+}
+
+const MAX_IMAGE: u64 = 5 * 1024 * 1024;
+
+/// Put each screenshot into its tool result as an image block, or tell a text-only model it cannot
+/// see it. The path itself never reaches the model.
+fn attach_images(m: &mut Message, images: Vec<(String, std::path::PathBuf)>, sees: bool) {
+    use base64::Engine;
+    for (id, path) in images {
+        let Some(b) = m
+            .content
+            .iter_mut()
+            .find(|b| b["type"] == "tool_result" && b["tool_use_id"] == id.as_str())
+        else {
+            continue;
+        };
+        let full = b["content"].as_str().unwrap_or("").to_string();
+        let text = full
+            .split_once('\n')
+            .map(|(_, t)| t)
+            .unwrap_or("")
+            .to_string();
+        let bytes = std::fs::metadata(&path)
+            .ok()
+            .filter(|md| md.len() <= MAX_IMAGE)
+            .and_then(|_| std::fs::read(&path).ok())
+            .filter(|b| b.starts_with(&[0xFF, 0xD8, 0xFF]));
+        b["content"] = match bytes {
+            Some(bytes) if sees => json!([
+                {"type": "text", "text": text},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                    "data": base64::engine::general_purpose::STANDARD.encode(bytes)}},
+            ]),
+            _ => json!(format!(
+                "{text}\nThis model cannot see pictures, so you only know which app is in front. Say so, \
+                 and that the picture is on Markon's screen."
+            )),
+        };
+    }
+}
+
+/// Pictures are sent once: the history keeps a note instead, so later turns stay small.
+fn drop_images(msgs: &mut [Message]) {
+    for b in msgs.iter_mut().flat_map(|m| m.content.iter_mut()) {
+        if let Some(parts) = b["content"].as_array_mut() {
+            for p in parts.iter_mut().filter(|p| p["type"] == "image") {
+                *p = json!({"type": "text", "text": "[a picture of the screen was shown here]"});
+            }
+        }
+    }
 }
 
 /// Native tools and MCP servers behind one list (implemented in `markon-tools`).
@@ -647,7 +722,10 @@ impl Agent {
                         r = self.run_tools(calls, &tools, cfg.max_tool_output, cfg.tool_limit, &mut guard) => r,
                         _ = cancelled.changed() => return self.cancelled(turn_id, &msgs[from]),
                     };
-                    msgs.push(Message::tool_results(results));
+                    let (results, images) = results;
+                    let mut m = Message::tool_results(results);
+                    attach_images(&mut m, images, sees_images(provider.route()));
+                    msgs.push(m);
                 }
             }
         }
@@ -658,6 +736,7 @@ impl Agent {
             });
         }
         drop_thinking(&mut msgs);
+        drop_images(&mut msgs);
         {
             let mut h = self.history.lock().expect("history lock");
             if let Some(spoken) = self.spoken.lock().expect("spoken").take() {
@@ -872,7 +951,7 @@ impl Agent {
         cap: usize,
         limit: Duration,
         guard: &mut loop_guard::LoopGuard,
-    ) -> Vec<ToolResult> {
+    ) -> (Vec<ToolResult>, Vec<(String, std::path::PathBuf)>) {
         let deadline = tokio::time::Instant::now() + limit;
         let known: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         let mut handles = Vec::new();
@@ -916,6 +995,7 @@ impl Agent {
             handles.push((c, Instant::now(), tokio::spawn(fut)));
         }
         let mut out = Vec::new();
+        let mut images = Vec::new();
         for (c, t0, mut h) in handles {
             let r = match tokio::time::timeout_at(deadline, &mut h).await {
                 Ok(r) => r.unwrap_or_else(|e| Err(format!("tool crashed: {e}"))),
@@ -946,13 +1026,19 @@ impl Agent {
                 ok,
                 output: full.clone(),
             });
+            if ok
+                && c.name == SCREEN_TOOL
+                && let Some(p) = screenshot_path(&full)
+            {
+                images.push((c.id.clone(), p));
+            }
             out.push(ToolResult {
                 id: c.id,
                 content: cap_utf8(&full, cap),
                 is_error: !ok,
             });
         }
-        out
+        (out, images)
     }
 }
 

@@ -262,6 +262,7 @@ pub fn run() {
             setup::download_builtin_model,
             setup::download_embedder,
             sources::open_full_disk_access,
+            sources::open_permission_settings,
             sources::set_source_secret,
             sources::delete_source_secret,
             sources::mcp_sign_in,

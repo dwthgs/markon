@@ -190,6 +190,7 @@ export function SourcesSection({
             ['imessage', 'Messages'],
             ['telegram', 'Telegram'],
             ...src.mail.map((a) => [`mail:${a.user}`, `Mail (${a.user})`]),
+            ['screen', 'Screen'],
           ] as [string, string][]
         ).map(([id, label]) => (
           <label key={id} className="mr-4">

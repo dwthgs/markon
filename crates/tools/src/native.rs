@@ -1,5 +1,5 @@
 //! Native tools: files in approved folders, open an app or URL, run a confirmed command,
-//! screenshot a window the user picks, fetch a web page.
+//! fetch a web page. Looking at the screen is in `mac`.
 use markon_provider::ToolSpec;
 use serde_json::{Value, json};
 
@@ -46,12 +46,6 @@ pub fn specs() -> Vec<ToolSpec> {
             "Run a shell command. The user sees the exact command and must allow it every time.",
             json!({"command": {"type": "string"}}),
             &["command"],
-        ),
-        t(
-            "screenshot_window",
-            "Take a screenshot of one window. The user is asked and then clicks the window to capture.",
-            json!({}),
-            &[],
         ),
         t(
             "show_image",

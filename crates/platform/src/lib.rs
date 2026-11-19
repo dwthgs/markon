@@ -2,6 +2,10 @@
 //! another OS is a new impl of the same trait.
 use std::path::PathBuf;
 
+pub mod control;
+pub mod fake;
+pub use control::{AppCommand, AxCommand, Frame, Keys, Permission, ShortcutCommand, SystemCommand};
+
 /// Keychain service name for every Markon secret.
 pub const KEYCHAIN_SERVICE: &str = "com.markon.desktop";
 
@@ -56,6 +60,19 @@ pub trait Platform: Send + Sync {
     ) -> Result<(), PlatformError>;
     /// Control the Spotify app and report what it is playing.
     fn spotify(&self, cmd: SpotifyCommand<'_>) -> Result<NowPlaying, PlatformError>;
+    /// List or run Apple Shortcuts. Running is asked by the caller.
+    fn shortcuts(&self, cmd: ShortcutCommand<'_>) -> Result<String, PlatformError>;
+    /// Volume, brightness, Wi-Fi, sleep and lock.
+    fn system(&self, cmd: SystemCommand) -> Result<String, PlatformError>;
+    /// Running apps and the front window.
+    fn apps(&self, cmd: AppCommand<'_>) -> Result<String, PlatformError>;
+    /// Read and act on another app's window through the Accessibility API.
+    fn ax(&self, cmd: AxCommand<'_>) -> Result<String, PlatformError>;
+    /// Capture the main display as a JPEG at `path`. Needs Screen Recording.
+    fn screenshot(&self, path: &std::path::Path) -> Result<(), PlatformError>;
+    fn has_permission(&self, p: Permission) -> bool;
+    /// Deep link to the privacy pane that grants `p`.
+    fn open_permission_settings(&self, p: Permission) -> Result<(), PlatformError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -430,6 +447,34 @@ impl Platform for MacOs {
             }));
         }
         Ok(parse_now_playing(&String::from_utf8_lossy(&out.stdout)))
+    }
+
+    fn shortcuts(&self, cmd: ShortcutCommand<'_>) -> Result<String, PlatformError> {
+        control::shortcuts(cmd)
+    }
+
+    fn system(&self, cmd: SystemCommand) -> Result<String, PlatformError> {
+        control::system(cmd)
+    }
+
+    fn apps(&self, cmd: AppCommand<'_>) -> Result<String, PlatformError> {
+        control::apps(cmd)
+    }
+
+    fn ax(&self, cmd: AxCommand<'_>) -> Result<String, PlatformError> {
+        control::ax(cmd)
+    }
+
+    fn screenshot(&self, path: &std::path::Path) -> Result<(), PlatformError> {
+        control::screenshot(path)
+    }
+
+    fn has_permission(&self, p: Permission) -> bool {
+        control::has_permission(p)
+    }
+
+    fn open_permission_settings(&self, p: Permission) -> Result<(), PlatformError> {
+        run_open(&[p.settings_url()])
     }
 
     fn in_call_or_sharing(&self) -> bool {

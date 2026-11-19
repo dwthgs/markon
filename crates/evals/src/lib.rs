@@ -102,6 +102,10 @@ pub fn standard_tools() -> Vec<ToolSpec> {
             json!({"action": {"type": "string"}}),
         ),
     ]
+    .into_iter()
+    // The real descriptions, since they are what the model picks by.
+    .chain(markon_tools::mac::specs())
+    .collect()
 }
 
 /// Score one finished run.
@@ -222,6 +226,32 @@ mod tests {
         );
         let bad = score(&s, &["fetch_page".into()], "As an AI I can't.", None, 2000);
         assert_eq!(bad.problems.len(), 4, "{:?}", bad.problems);
+    }
+
+    /// Every full-control scenario names a real tool and scores through the loop.
+    #[tokio::test]
+    async fn full_control_scenarios_run_through_the_real_agent_loop() {
+        let all: Vec<Scenario> = serde_json::from_str(SCENARIOS).unwrap();
+        let names: Vec<String> = standard_tools().into_iter().map(|t| t.name).collect();
+        let m13: Vec<&Scenario> = all
+            .iter()
+            .filter(|s| {
+                s.tool
+                    .as_deref()
+                    .is_some_and(|t| markon_tools::mac::NAMES.contains(&t))
+            })
+            .collect();
+        assert!(m13.len() >= 7, "modules 1 to 5 each have a scenario");
+        for s in m13 {
+            let tool = s.tool.clone().unwrap();
+            assert!(names.contains(&tool), "{tool} is offered");
+            let fake = Arc::new(FakeProvider::new(vec![
+                FakeProvider::tools(&[("1", &tool, json!({}))]),
+                FakeProvider::text(&format!("Done. {}", s.contains.join(" "))),
+            ]));
+            let r = run(fake, s, "You are Markon.").await;
+            assert!(r.passed, "{}: {:?}", s.name, r.problems);
+        }
     }
 
     #[tokio::test]

@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = "=0.23.1"
 markon-provider = { path = "../provider" }
 regex = "=1.13.1"
 serde.workspace = true
