@@ -253,6 +253,31 @@ fn cut_point(msgs: &[Message], keep: usize) -> Option<usize> {
     })
 }
 
+/// Prepended to the next turn after the user talked over a reply.
+pub const SPEECH_INTERRUPTED_NOTE: &str =
+    "[Note: the user interrupted your previous spoken reply before it finished.]";
+/// A stale barge-in never annotates a message minutes later.
+const INTERRUPT_TTL: Duration = Duration::from_secs(120);
+
+/// Only the words already played are kept: this turn's assistant text (from `from` on) is
+/// replaced by `spoken`. Tool calls keep their results. Nothing spoken leaves no reply, and the API
+/// joins the user turns either side (as `drop_thinking` relies on).
+fn keep_spoken(msgs: &mut Vec<Message>, from: usize, spoken: &str) {
+    for m in msgs[from..]
+        .iter_mut()
+        .filter(|m| m.role == Role::Assistant)
+    {
+        m.content.retain(|b| b["type"] != "text");
+    }
+    msgs.retain(|m| !m.content.is_empty());
+    if !spoken.trim().is_empty() {
+        msgs.push(Message {
+            role: Role::Assistant,
+            content: vec![json!({"type": "text", "text": spoken})],
+        });
+    }
+}
+
 const APOLOGY: &str = "Sorry, I can't reach the model right now. Please try again in a moment.";
 const WRAP_UP: &str = "Tool limit for this turn reached. Do not call more tools: wrap up and answer with what you have.";
 
@@ -271,6 +296,12 @@ pub struct Agent {
     tainted: std::sync::atomic::AtomicBool,
     /// The running turn's start, first word and tool times.
     timing: Mutex<(Option<Instant>, Timings)>,
+    /// A turn is between its start and committing its history. Changed only under the history lock.
+    running: std::sync::atomic::AtomicBool,
+    /// What was spoken of the running turn's reply when the user talked over it.
+    spoken: Mutex<Option<String>>,
+    /// When the user last talked over a reply: the next turn carries the note.
+    interrupted_at: Mutex<Option<Instant>>,
 }
 
 enum RoundEnd {
@@ -304,6 +335,9 @@ impl Agent {
             next_turn: AtomicU64::new(1),
             tainted: std::sync::atomic::AtomicBool::new(false),
             timing: Mutex::new((None, Timings::default())),
+            running: Default::default(),
+            spoken: Mutex::new(None),
+            interrupted_at: Mutex::new(None),
         };
         (agent, rx)
     }
@@ -370,6 +404,26 @@ impl Agent {
     /// Cancel the running turn, if any.
     pub fn cancel(&self) {
         self.cancel.send_modify(|v| *v += 1);
+    }
+
+    /// The user talked over the reply: the history keeps only `spoken`, the sentences that
+    /// finished playing, and the next turn starts with [`SPEECH_INTERRUPTED_NOTE`].
+    /// A turn still running is cancelled and commits that much.
+    pub fn interrupted(&self, spoken: &str) {
+        *self.interrupted_at.lock().expect("interrupted") = Some(Instant::now());
+        let mut h = self.history.lock().expect("history lock");
+        if self.running.load(Ordering::SeqCst) {
+            *self.spoken.lock().expect("spoken") = Some(spoken.to_string());
+            drop(h);
+            self.cancel();
+            return;
+        }
+        // Already committed: the last turn starts at the last user message that is not a tool result.
+        if let Some(from) = h.iter().rposition(|m| {
+            m.role == Role::User && !m.content.iter().any(|b| b["type"] == "tool_result")
+        }) {
+            keep_spoken(&mut h, from + 1, spoken);
+        }
     }
 
     /// Long conversations stay fast:
@@ -486,7 +540,16 @@ impl Agent {
         let mut guard = loop_guard::LoopGuard::default();
         // Work on a copy: history is only committed when the turn finishes, so a cancel leaves nothing behind.
         let mut msgs = self.history();
-        msgs.push(Message::user_text(&turn.text));
+        let from = msgs.len();
+        // For this turn only.
+        let text = match self.interrupted_at.lock().expect("interrupted").take() {
+            Some(at) if at.elapsed() < INTERRUPT_TTL => {
+                format!("{SPEECH_INTERRUPTED_NOTE} {}", turn.text)
+            }
+            _ => turn.text.clone(),
+        };
+        msgs.push(Message::user_text(&text));
+        self.running.store(true, Ordering::SeqCst);
         let mut text = String::new();
         let mut usage = (0, 0);
         let mut rounds = 0;
@@ -513,7 +576,7 @@ impl Agent {
                 )
                 .await;
             match end {
-                RoundEnd::Cancelled => return self.cancelled(turn_id),
+                RoundEnd::Cancelled => return self.cancelled(turn_id, &msgs[from]),
                 RoundEnd::Failed(e) => {
                     self.emit(AgentEvent::Error(e.to_string()));
                     if text.is_empty() {
@@ -571,7 +634,7 @@ impl Agent {
                             )
                             .await
                         {
-                            RoundEnd::Cancelled => return self.cancelled(turn_id),
+                            RoundEnd::Cancelled => return self.cancelled(turn_id, &msgs[from]),
                             RoundEnd::Done { partial: p } => partial = p,
                             RoundEnd::Failed(_) | RoundEnd::Tools(_) | RoundEnd::Paused => {
                                 partial = true
@@ -582,7 +645,7 @@ impl Agent {
                     rounds += 1;
                     let results = tokio::select! {
                         r = self.run_tools(calls, &tools, cfg.max_tool_output, cfg.tool_limit, &mut guard) => r,
-                        _ = cancelled.changed() => return self.cancelled(turn_id),
+                        _ = cancelled.changed() => return self.cancelled(turn_id, &msgs[from]),
                     };
                     msgs.push(Message::tool_results(results));
                 }
@@ -595,7 +658,14 @@ impl Agent {
             });
         }
         drop_thinking(&mut msgs);
-        *self.history.lock().expect("history lock") = msgs;
+        {
+            let mut h = self.history.lock().expect("history lock");
+            if let Some(spoken) = self.spoken.lock().expect("spoken").take() {
+                keep_spoken(&mut msgs, from + 1, &spoken);
+            }
+            *h = msgs;
+            self.running.store(false, Ordering::SeqCst);
+        }
         self.emit(AgentEvent::TurnFinished(TurnSummary {
             turn_id,
             user: turn.text,
@@ -612,7 +682,17 @@ impl Agent {
         }));
     }
 
-    fn cancelled(&self, turn_id: u64) {
+    /// `question` is the turn's user message: kept, with what was spoken, when the user talked over it.
+    fn cancelled(&self, turn_id: u64, question: &Message) {
+        {
+            let mut h = self.history.lock().expect("history lock");
+            if let Some(spoken) = self.spoken.lock().expect("spoken").take() {
+                let from = h.len();
+                h.push(question.clone());
+                keep_spoken(&mut h, from + 1, &spoken);
+            }
+            self.running.store(false, Ordering::SeqCst);
+        }
         self.emit(AgentEvent::TurnCancelled { turn_id });
         // The user interrupted to say something new: the app is already listening, keep it that way.
         if self.state() != AgentState::Listening {

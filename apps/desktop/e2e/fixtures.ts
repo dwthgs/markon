@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test';
 export const settingsView = {
   settings: {
     voice: null,
+    voice_engine: 'kokoro',
     route: 'anthropic',
     model: null,
     hotkey: 'Alt+Space',
@@ -36,7 +37,7 @@ export const settingsView = {
     chunks: 342,
     meaning_search: false,
   },
-  keys: { anthropic: false, openrouter: false },
+  keys: { anthropic: false, openrouter: false, cartesia: false },
   models: [
     { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' },
     { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call } from './tauri';
 
-export type Route = 'anthropic' | 'openrouter' | 'relay' | 'local' | 'builtin';
+export type Route = 'anthropic' | 'openrouter' | 'relay' | 'local' | 'builtin' | 'claudecode';
 export type Voice = 'markon' | 'markan';
+export type VoiceEngine = 'kokoro' | 'cartesia';
 
 export interface SettingsView {
   settings: {
     voice: Voice | null;
+    voice_engine: VoiceEngine;
     route: Route;
     model: string | null;
     hotkey: string;
@@ -29,7 +31,7 @@ export interface SettingsView {
     chunks: number;
     meaning_search: boolean;
   };
-  keys: { anthropic: boolean; openrouter: boolean };
+  keys: { anthropic: boolean; openrouter: boolean; cartesia: boolean };
   models: { id: string; name: string }[];
   default_model: string;
   mcp: { name: string; status: { state: string } }[];
@@ -89,6 +91,11 @@ export interface SourceSettings {
 export type Patch = Partial<Omit<SettingsView['settings'], 'device_id' | 'relay_url'>>;
 
 export const ROUTES: { id: Route; label: string; hint: string }[] = [
+  {
+    id: 'claudecode',
+    label: 'Claude Code on this Mac',
+    hint: 'No key: uses the Claude plan Claude Code is signed in with.',
+  },
   { id: 'anthropic', label: 'My own Anthropic key', hint: 'Claude, billed to your Anthropic account.' },
   {
     id: 'openrouter',

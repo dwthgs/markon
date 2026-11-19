@@ -10,16 +10,19 @@ pub trait SttEngine: Send {
 
 pub struct Whisper {
     ctx: WhisperContext,
+    prompt: String,
 }
 
 /// Biases whisper toward the product names it otherwise hears as "Markham".
 const PROMPT: &str = "Markon, Markan.";
 
 impl Whisper {
-    pub fn load(path: &Path) -> Result<Self, AudioError> {
+    /// `hint` is extra vocabulary to bias toward, such as spoken command phrases ("hacker mode").
+    pub fn load(path: &Path, hint: &str) -> Result<Self, AudioError> {
         let ctx = WhisperContext::new_with_params(path, WhisperContextParameters::default())
             .map_err(|e| AudioError::Model(format!("whisper: {e}")))?;
-        Ok(Self { ctx })
+        let prompt = format!("{PROMPT} {hint}").trim_end().to_string();
+        Ok(Self { ctx, prompt })
     }
 }
 
@@ -37,7 +40,7 @@ impl SttEngine for Whisper {
         let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         p.set_n_threads(4); // faster than 8 on Apple Silicon,
         p.set_language(Some("en"));
-        p.set_initial_prompt(PROMPT);
+        p.set_initial_prompt(&self.prompt);
         p.set_print_progress(false);
         p.set_print_realtime(false);
         p.set_print_special(false);

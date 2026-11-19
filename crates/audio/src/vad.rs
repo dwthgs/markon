@@ -83,7 +83,35 @@ impl Vad {
     }
 }
 
-/// True when the transcript so far ends a clause or sentence.
+/// Last words of someone still thinking: whisper puts a full stop after them all the same.
+const HESITATIONS: &[&str] = &[
+    "um", "umm", "uh", "uhh", "er", "erm", "hmm", "so", "and", "but", "or", "like", "the", "a", "to",
+    "because", "well",
+];
+
+/// True when the transcript so far ends a clause or sentence, and not on a hesitation
+/// ("I want to, um." or "So...").
 pub fn ends_clause(text: &str) -> bool {
-    text.trim_end().ends_with(['.', '!', '?'])
+    let t = text.trim_end();
+    let last = t
+        .rsplit(|c: char| !c.is_alphanumeric())
+        .find(|w| !w.is_empty())
+        .unwrap_or("")
+        .to_lowercase();
+    t.ends_with(['.', '!', '?']) && !t.ends_with("...") && !HESITATIONS.contains(&last.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ends_clause;
+
+    #[test]
+    fn a_hesitation_is_not_the_end_of_a_sentence() {
+        assert!(ends_clause("What's the weather tomorrow?"));
+        assert!(ends_clause("Play some jazz."));
+        assert!(!ends_clause("I want to, um."));
+        assert!(!ends_clause("So..."));
+        assert!(!ends_clause("Remind me to call Sara and"));
+        assert!(!ends_clause("Open the."));
+    }
 }

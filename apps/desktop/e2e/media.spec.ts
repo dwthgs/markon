@@ -49,7 +49,7 @@ test('a YouTube card embeds the privacy-enhanced player', async ({ page }) => {
   await expect(frame).toHaveAttribute('src', /^https:\/\/www\.youtube-nocookie\.com\/embed\/dQw4w9WgXcQ\?/);
 });
 
-test('local audio and video play from their file, and duck while Markon talks', async ({ page }) => {
+test('local audio and video play from their file, and go silent while Markon talks', async ({ page }) => {
   await open(page);
   await emit(page, 'markon://card', card('a', 'audio', 'Song', { path: '/Users/me/Music/song.mp3' }));
   await emit(page, 'markon://card', card('m', 'video', 'Clip', { path: '/Users/me/Movies/clip.mp4' }));
@@ -58,7 +58,7 @@ test('local audio and video play from their file, and duck while Markon talks', 
   await expect(page.locator('video')).toHaveAttribute('src', /clip\.mp4/);
   expect(await audio.evaluate((a: HTMLAudioElement) => a.volume)).toBe(1);
   await emit(page, 'markon://agent', { type: 'state_changed', data: 'speaking' });
-  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.volume)).toBe(0.2);
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.volume)).toBe(0);
   await emit(page, 'markon://agent', { type: 'state_changed', data: 'idle' });
   await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.volume)).toBe(1);
 });
@@ -83,6 +83,18 @@ test('the Spotify card shows the track and its buttons control Spotify', async (
   await c.getByRole('button', { name: 'Next track' }).click();
   const actions = (await calls(page, 'spotify_control')).map((a) => (a as { action: string }).action);
   expect(actions).toEqual(expect.arrayContaining(['pause', 'next']));
+});
+
+test('Spotify pauses while Markon listens or talks, and resumes after', async ({ page }) => {
+  const np = { kind: 'music', track: 'Song', artist: 'Band', album: '', artwork: '', state: 'playing' };
+  await open(page, { spotify_control: np });
+  await emit(page, 'markon://card', card('s', 'music', 'Song', np));
+  await expect(page.getByRole('article', { name: /music: song/i })).toBeVisible();
+  const last = async () => ((await calls(page, 'spotify_control')).at(-1) as { action: string })?.action;
+  await emit(page, 'markon://agent', { type: 'state_changed', data: 'listening' });
+  await expect.poll(last).toBe('pause');
+  await emit(page, 'markon://agent', { type: 'state_changed', data: 'idle' });
+  await expect.poll(last).toBe('play');
 });
 
 test('a YouTube video fills its card', async ({ page }) => {

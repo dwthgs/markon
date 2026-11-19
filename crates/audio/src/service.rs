@@ -1,4 +1,5 @@
 //! The running audio service. cpal streams are not `Send` on macOS, so each lives on its own thread.
+use crate::cartesia::Cartesia;
 use crate::features::{FeatureExtractor, Features};
 use crate::manifest::Manifest;
 use crate::resample::{downmix, resample};
@@ -67,6 +68,8 @@ pub type EventSink = Arc<dyn Fn(AudioEvent) + Send + Sync>;
 
 type Stt = Arc<Mutex<Option<Box<dyn SttEngine>>>>;
 type Tts = Arc<Mutex<Option<Box<dyn TtsEngine>>>>;
+/// When set, Cartesia speaks instead of Kokoro. Kokoro stays loaded to switch back.
+type Online = Arc<Mutex<Option<Cartesia>>>;
 
 struct Capture {
     stop: Arc<AtomicBool>,
@@ -82,12 +85,63 @@ enum Job {
 pub(crate) struct Playback {
     queue: Mutex<VecDeque<f32>>,
     generation: AtomicU64,
+    /// A reply is in progress: set with its first sound, cleared once nothing more is queued. It stays
+    /// set through the silence while the next sentence is synthesised.
     pub(crate) active: AtomicBool,
+    /// Markon's voice is leaving the speaker now (the last output callback played queued samples).
+    pub(crate) sounding: AtomicBool,
+    /// Samples taken from the queue since the app started.
+    popped: AtomicU64,
+    spoken: Mutex<Spoken>,
     /// What the speakers just played, for the echo canceller (mono, at `render_rate`).
     pub(crate) render: Mutex<Vec<f32>>,
     pub(crate) render_rate: AtomicU32,
     /// The user may be starting to talk over Markon: play at a quarter of the volume.
     pub(crate) duck: AtomicBool,
+    /// The last short phrase ("Yes?") as played: (text, output rate, samples). Synthesising it on every
+    /// wake cost 0.4-1 s. Cleared whenever the voice or engine changes.
+    ack: Mutex<Option<(String, u32, Vec<f32>)>>,
+}
+
+/// Phrases up to this long are cached: the wake answer, not reply sentences.
+const ACK_MAX_CHARS: usize = 12;
+
+/// The sentences of the current reply and where each ends in the stream of queued samples, so a cut
+/// knows which ones finished playing.
+#[derive(Default)]
+struct Spoken {
+    pushed: u64,
+    sentences: Vec<(u64, String)>,
+    /// The sentence that was playing when the reply was cut.
+    cut_off: Option<String>,
+}
+
+impl Spoken {
+    fn add(&mut self, samples: usize, text: String) {
+        self.pushed += samples as u64;
+        self.sentences.push((self.pushed, text));
+    }
+
+    /// The queue was emptied after `popped` samples had played.
+    fn cut(&mut self, popped: u64) {
+        self.pushed = popped;
+        let done = self.sentences.partition_point(|(end, _)| *end <= popped);
+        if let Some((_, s)) = self.sentences.get(done) {
+            self.cut_off = Some(s.clone());
+        }
+        self.sentences.truncate(done);
+    }
+
+    /// The sentences that finished playing, and those plus the one cut off mid-way.
+    fn said(&self) -> (String, String) {
+        let done: Vec<&str> = self.sentences.iter().map(|(_, s)| s.as_str()).collect();
+        let heard = done
+            .iter()
+            .copied()
+            .chain(self.cut_off.as_deref())
+            .collect::<Vec<_>>();
+        (done.join(" "), heard.join(" "))
+    }
 }
 
 impl Playback {
@@ -95,7 +149,13 @@ impl Playback {
     /// own `cancel_speech` still reports the end of playback.
     pub(crate) fn cut(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self.queue.lock().expect("queue").clear();
+        let mut q = self.queue.lock().expect("queue");
+        q.clear();
+        self.spoken
+            .lock()
+            .expect("spoken")
+            .cut(self.popped.load(Ordering::SeqCst));
+        drop(q);
         self.duck.store(false, Ordering::SeqCst);
     }
 }
@@ -104,6 +164,7 @@ pub struct Audio {
     sink: EventSink,
     stt: Stt,
     tts: Tts,
+    online: Online,
     capture: Mutex<Option<Capture>>,
     play: Arc<Playback>,
     jobs: Sender<Job>,
@@ -112,12 +173,19 @@ pub struct Audio {
     listening: Arc<AtomicBool>,
     wake: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
     handoff: crate::wake::Handoff,
+    /// A turn is running: words said while Markon thinks reach it without the wake phrase.
+    attentive: Arc<AtomicBool>,
+    /// The voice the loaded speech engine speaks with (the persona's name follows it).
+    voice: Mutex<Option<Voice>>,
+    /// The verified Silero model: without it talking over Markon is off.
+    vad: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl Audio {
     pub fn new(sink: EventSink) -> Self {
         let stt: Stt = Arc::new(Mutex::new(None));
         let tts: Tts = Arc::new(Mutex::new(None));
+        let online: Online = Arc::new(Mutex::new(None));
         let play = Arc::new(Playback {
             queue: Mutex::new(VecDeque::new()),
             generation: AtomicU64::new(0),
@@ -125,19 +193,25 @@ impl Audio {
             render: Mutex::new(Vec::new()),
             render_rate: AtomicU32::new(0),
             duck: AtomicBool::new(false),
+            sounding: AtomicBool::new(false),
+            popped: AtomicU64::new(0),
+            spoken: Mutex::new(Spoken::default()),
+            ack: Mutex::new(None),
         });
         let (jobs, rx) = channel();
         {
-            let (sink, tts, play) = (sink.clone(), tts.clone(), play.clone());
+            let (sink, tts, online, play) =
+                (sink.clone(), tts.clone(), online.clone(), play.clone());
             std::thread::Builder::new()
                 .name("markon-speaker".into())
-                .spawn(move || speaker_thread(rx, sink, tts, play))
+                .spawn(move || speaker_thread(rx, sink, tts, online, play))
                 .expect("speaker thread");
         }
         Self {
             sink,
             stt,
             tts,
+            online,
             capture: Mutex::new(None),
             play,
             jobs,
@@ -145,6 +219,9 @@ impl Audio {
             listening: Arc::new(AtomicBool::new(false)),
             wake: Mutex::new(None),
             handoff: Default::default(),
+            attentive: Default::default(),
+            voice: Mutex::new(None),
+            vad: Mutex::new(None),
         }
     }
 
@@ -152,6 +229,7 @@ impl Audio {
     pub fn set_engines(&self, stt: Option<Box<dyn SttEngine>>, tts: Option<Box<dyn TtsEngine>>) {
         *self.stt.lock().expect("stt") = stt;
         *self.tts.lock().expect("tts") = tts;
+        self.play.ack.lock().expect("ack").take();
     }
 
     /// Listen for "Hey Markon" in the background until `stop_wake`. Needs the models loaded.
@@ -161,9 +239,11 @@ impl Audio {
             return;
         }
         let stop = Arc::new(AtomicBool::new(false));
-        let (st, listening, play, handoff, sink, stt) = (
+        let vad = self.vad.lock().expect("vad").clone();
+        let (st, listening, attentive, play, handoff, sink, stt) = (
             stop.clone(),
             self.listening.clone(),
+            self.attentive.clone(),
             self.play.clone(),
             self.handoff.clone(),
             self.sink.clone(),
@@ -175,10 +255,19 @@ impl Audio {
         };
         if let Ok(t) = std::thread::Builder::new()
             .name("markon-wake".into())
-            .spawn(move || crate::wake::wake_thread(st, listening, play, handoff, sink, transcribe))
+            .spawn(move || {
+                crate::wake::wake_thread(
+                    st, listening, attentive, play, handoff, sink, vad, transcribe,
+                )
+            })
         {
             *w = Some((stop, t));
         }
+    }
+
+    /// While set, anything said (not only the wake phrase) is reported as `Wake`.
+    pub fn set_attentive(&self, on: bool) {
+        self.attentive.store(on, Ordering::SeqCst);
     }
 
     pub fn stop_wake(&self) {
@@ -195,7 +284,8 @@ impl Audio {
 
     /// Verify every pinned file, then load whisper and Kokoro with the chosen voice.
     /// A file that does not match its checksum is never loaded: Markon refuses to speak.
-    pub fn load_models(&self, dir: &Path, voice: Voice) -> Result<(), AudioError> {
+    /// `hint` is vocabulary whisper should expect, passed to [`Whisper::load`].
+    pub fn load_models(&self, dir: &Path, voice: Voice, hint: &str) -> Result<(), AudioError> {
         (self.sink)(AudioEvent::ModelsLoading);
         let m = Manifest::bundled();
         let check = |id: &str| {
@@ -211,9 +301,18 @@ impl Audio {
         let voice_file = check(voice.manifest_id())?;
         let gold = check("g2p-gb-gold")?;
         let silver = check("g2p-gb-silver")?;
-        let stt = Whisper::load(&whisper)?;
+        // Talking over Markon only: a bad file turns that off and says so, Markon still speaks.
+        *self.vad.lock().expect("vad") = m
+            .entry("silero-vad")
+            .and_then(|e| e.verify(dir))
+            .inspect_err(|e| {
+                eprintln!("[barge] Silero VAD not verified ({e}): talking over Markon is off")
+            })
+            .ok();
+        let stt = Whisper::load(&whisper, hint)?;
         let tts = Kokoro::load(&kokoro, &voice_file, G2p::load(&gold, &silver)?)?;
         self.set_engines(Some(Box::new(stt)), Some(Box::new(tts)));
+        *self.voice.lock().expect("voice") = Some(voice);
         (self.sink)(AudioEvent::ModelsReady);
         Ok(())
     }
@@ -224,9 +323,30 @@ impl Audio {
             .entry(voice.manifest_id())?
             .verify(dir)?;
         match self.tts.lock().expect("tts").as_mut() {
-            Some(t) => t.set_voice(&path),
-            None => Err(AudioError::NotReady),
+            Some(t) => t.set_voice(&path)?,
+            None => return Err(AudioError::NotReady),
         }
+        if let Some(c) = self.online.lock().expect("online").as_mut() {
+            c.select(voice);
+        }
+        *self.voice.lock().expect("voice") = Some(voice);
+        self.play.ack.lock().expect("ack").take();
+        Ok(())
+    }
+
+    /// Speak through Cartesia (Some) or Kokoro (None) from the next sentence on.
+    pub fn set_online(&self, engine: Option<Cartesia>) {
+        *self.online.lock().expect("online") = engine;
+        self.play.ack.lock().expect("ack").take();
+    }
+
+    pub fn is_online(&self) -> bool {
+        self.online.lock().map(|o| o.is_some()).unwrap_or(false)
+    }
+
+    /// The voice the loaded engine speaks with, if any.
+    pub fn voice(&self) -> Option<Voice> {
+        *self.voice.lock().expect("voice")
     }
 
     pub fn is_listening(&self) -> bool {
@@ -317,6 +437,16 @@ impl Audio {
     /// Start a new reply: the next sentence is split so its first words play sooner.
     pub fn begin_reply(&self) {
         self.first_of_reply.store(true, Ordering::SeqCst);
+        *self.play.spoken.lock().expect("spoken") = Spoken {
+            pushed: self.play.popped.load(Ordering::SeqCst),
+            ..Spoken::default()
+        };
+    }
+
+    /// What Markon said aloud in the current or just cut reply: the sentences that finished playing,
+    /// and those plus the one it was in the middle of (for telling its own echo from the user).
+    pub fn spoken(&self) -> (String, String) {
+        self.play.spoken.lock().expect("spoken").said()
     }
 
     /// Queue one sentence for speech. Refuses if the pinned voice is not loaded.
@@ -341,8 +471,7 @@ impl Audio {
 
     /// Stop speaking now: drop queued sentences and the unplayed tail.
     pub fn cancel_speech(&self) {
-        self.play.generation.fetch_add(1, Ordering::SeqCst);
-        self.play.queue.lock().expect("queue").clear();
+        self.play.cut();
         if self.play.active.swap(false, Ordering::SeqCst) {
             (self.sink)(AudioEvent::PlaybackEnded);
         }
@@ -491,11 +620,17 @@ fn open_output(play: Arc<Playback>, sink: EventSink) -> Result<Output, AudioErro
                     } else {
                         1.0
                     };
+                    let mut popped = 0;
                     for frame in data.chunks_mut(channels) {
-                        let s = q.pop_front().unwrap_or(0.0) * gain;
+                        let s = q.pop_front().map_or(0.0, |s| {
+                            popped += 1;
+                            s * gain
+                        });
                         frame.fill(s);
                         mono.push(s);
                     }
+                    play.popped.fetch_add(popped, Ordering::SeqCst);
+                    play.sounding.store(popped > 0, Ordering::Relaxed);
                 }
                 if let Ok(mut r) = play.render.try_lock() {
                     r.extend_from_slice(&mono);
@@ -530,7 +665,13 @@ fn open_output(play: Arc<Playback>, sink: EventSink) -> Result<Output, AudioErro
     })
 }
 
-fn speaker_thread(rx: Receiver<Job>, sink: EventSink, tts: Tts, play: Arc<Playback>) {
+fn speaker_thread(
+    rx: Receiver<Job>,
+    sink: EventSink,
+    tts: Tts,
+    online: Online,
+    play: Arc<Playback>,
+) {
     let mut out: Option<Output> = None;
     loop {
         match rx.recv_timeout(Duration::from_millis(40)) {
@@ -550,7 +691,29 @@ fn speaker_thread(rx: Receiver<Job>, sink: EventSink, tts: Tts, play: Arc<Playba
                     }
                 }
                 let Some(o) = out.as_ref() else { continue };
-                let samples = {
+                // A clone, so a slow request never holds the lock settings need to switch engines.
+                let short = text.chars().count() <= ACK_MAX_CHARS;
+                let cached = play
+                    .ack
+                    .lock()
+                    .expect("ack")
+                    .as_ref()
+                    .filter(|(t, r, _)| short && *t == text && *r == o.rate)
+                    .map(|(.., s)| s.clone());
+                let cloud = online.lock().expect("online").clone();
+                let samples = if let Some(s) = cached {
+                    s
+                } else if let Some(mut c) = cloud {
+                    match c.synth(&text) {
+                        Ok(s) => resample(&s, c.sample_rate(), o.rate),
+                        Err(e) => {
+                            sink(AudioEvent::Error {
+                                message: e.to_string(),
+                            });
+                            continue;
+                        }
+                    }
+                } else {
                     let mut guard = tts.lock().expect("tts");
                     let Some(engine) = guard.as_mut() else {
                         sink(AudioEvent::Error {
@@ -568,9 +731,14 @@ fn speaker_thread(rx: Receiver<Job>, sink: EventSink, tts: Tts, play: Arc<Playba
                         }
                     }
                 };
+                if short {
+                    *play.ack.lock().expect("ack") = Some((text.clone(), o.rate, samples.clone()));
+                }
                 if generation != play.generation.load(Ordering::SeqCst) {
                     continue; // cancelled while synthesising
                 }
+                // Recorded first: its end must never look played before its samples are queued.
+                play.spoken.lock().expect("spoken").add(samples.len(), text);
                 play.queue.lock().expect("queue").extend(samples);
                 if !play.active.swap(true, Ordering::SeqCst) {
                     sink(AudioEvent::PlaybackStarted);
@@ -583,6 +751,7 @@ fn speaker_thread(rx: Receiver<Job>, sink: EventSink, tts: Tts, play: Arc<Playba
                         sink(AudioEvent::PlaybackEnded);
                     }
                     out = None;
+                    play.sounding.store(false, Ordering::SeqCst);
                 }
             }
             Err(RecvTimeoutError::Disconnected) => return,
@@ -592,3 +761,25 @@ fn speaker_thread(rx: Receiver<Job>, sink: EventSink, tts: Tts, play: Arc<Playba
 
 /// Features of a finished frame, re-exported for the app.
 pub type FeatureFrame = Features;
+
+#[cfg(test)]
+mod tests {
+    use super::Spoken;
+
+    #[test]
+    fn a_cut_keeps_only_the_sentences_that_finished_playing() {
+        let mut s = Spoken::default();
+        s.add(100, "One.".into());
+        s.add(100, "Two.".into());
+        s.add(100, "Three.".into());
+        s.cut(150);
+        assert_eq!(s.said(), ("One.".into(), "One. Two.".into()));
+        // Cancelling again after the cut changes nothing.
+        s.cut(150);
+        assert_eq!(s.said(), ("One.".into(), "One. Two.".into()));
+        // Positions carry on from the cut for whatever is queued next.
+        s.add(50, "Four.".into());
+        s.cut(200);
+        assert_eq!(s.said().0, "One. Four.");
+    }
+}

@@ -37,6 +37,45 @@ pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     }
 }
 
+/// Chunk-by-chunk conversion that keeps its filter state between calls, for the wake thread's 10 ms
+/// frames (resampling each frame alone would put a click at every frame edge).
+pub struct Streaming {
+    r: Option<Fft<f32>>,
+    chunk: usize,
+    out: Vec<f32>,
+}
+
+impl Streaming {
+    /// `chunk` is the exact number of samples every `push` gets.
+    pub fn new(from: u32, to: u32, chunk: usize) -> Self {
+        let r = (from != to)
+            .then(|| Fft::<f32>::new(from as usize, to as usize, chunk, 1, FixedSync::Input).ok())
+            .flatten();
+        let out = vec![0.0; r.as_ref().map_or(0, |r| r.output_frames_max())];
+        Self { r, chunk, out }
+    }
+
+    pub fn push(&mut self, input: &[f32]) -> Vec<f32> {
+        let Some(r) = self.r.as_mut() else {
+            return input.to_vec();
+        };
+        if input.len() != self.chunk || !input.iter().all(|x| x.is_finite()) {
+            return Vec::new();
+        }
+        let n = self.out.len();
+        let (Ok(src), Ok(mut dst)) = (
+            InterleavedSlice::new(input, 1, input.len()),
+            InterleavedSlice::new_mut(&mut self.out, 1, n),
+        ) else {
+            return Vec::new();
+        };
+        match r.process_into_buffer(&src, &mut dst, None) {
+            Ok((_, produced)) => self.out[..produced].to_vec(),
+            Err(_) => Vec::new(),
+        }
+    }
+}
+
 /// Average interleaved channels to mono.
 pub fn downmix(data: &[f32], channels: usize) -> impl Iterator<Item = f32> + '_ {
     data.chunks(channels.max(1))
@@ -76,6 +115,33 @@ mod tests {
             .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
             .count();
         assert!((430..=450).contains(&zc), "{zc} crossings");
+    }
+
+    #[test]
+    fn streams_10_ms_frames_without_losing_time() {
+        for from in [48_000u32, 44_100] {
+            let chunk = from as usize / 100;
+            let mut s = Streaming::new(from, 16_000, chunk);
+            let sine: Vec<f32> = (0..from as usize)
+                .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / from as f32).sin())
+                .collect();
+            let out: Vec<f32> = sine.chunks_exact(chunk).flat_map(|c| s.push(c)).collect();
+            assert!(
+                (out.len() as i64 - 16_000).abs() < 20,
+                "{from}: {}",
+                out.len()
+            );
+            let mid = &out[4000..12000];
+            let zc = mid
+                .windows(2)
+                .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+                .count();
+            assert!((430..=450).contains(&zc), "{from}: {zc} crossings");
+        }
+        assert_eq!(
+            Streaming::new(16_000, 16_000, 160).push(&[0.5; 160]),
+            vec![0.5; 160]
+        );
     }
 
     #[test]

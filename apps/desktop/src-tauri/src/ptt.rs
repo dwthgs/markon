@@ -12,6 +12,14 @@ pub const ECHO_TAIL: Duration = Duration::from_millis(300);
 
 /// "Hey Markon, stop": words that end what Markon is doing instead of starting a request.
 pub fn is_stop(text: &str) -> bool {
+    // "Stop. Stop it." is still a stop: every sentence has to be one.
+    let mut parts = text
+        .split(['.', '!', '?', ','])
+        .filter(|p| p.chars().any(char::is_alphanumeric));
+    parts.next().is_some_and(stop_phrase) && parts.all(stop_phrase)
+}
+
+fn stop_phrase(text: &str) -> bool {
     let t: String = text
         .to_lowercase()
         .chars()
@@ -288,6 +296,8 @@ mod tests {
     #[test]
     fn stop_words_stop_and_requests_do_not() {
         assert!(is_stop("Stop."));
+        assert!(is_stop("Stop. Stop it!"));
+        assert!(!is_stop("Stop. Play the next one."));
         assert!(is_stop("never mind"));
         assert!(is_stop("Cancel that!"));
         assert!(!is_stop("stop the music on Spotify"));

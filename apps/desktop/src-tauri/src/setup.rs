@@ -30,7 +30,7 @@ fn account(route: Route) -> Option<&'static str> {
     match route {
         Route::Anthropic => Some(accounts::ANTHROPIC),
         Route::OpenRouter => Some(accounts::OPENROUTER),
-        Route::Relay | Route::Local | Route::BuiltIn => None,
+        Route::Relay | Route::Local | Route::BuiltIn | Route::ClaudeCode => None,
     }
 }
 
@@ -44,6 +44,7 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
         Route::OpenRouter => "openrouter.ai".to_string(),
         Route::Local => format!("{} (this Mac)", s.local_url),
         Route::BuiltIn => "none: the built-in model runs on this Mac".into(),
+        Route::ClaudeCode => "api.anthropic.com, through Claude Code on this Mac".into(),
         Route::Relay => {
             if s.relay_url.is_empty() {
                 "free-trial relay (not available in this build)".into()
@@ -54,6 +55,7 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
     };
     let mut endpoints = vec![
         json!({"name": "Model", "host": model_host, "on": true, "note": "Needed to answer you."}),
+        json!({"name": "Voice", "host": "api.cartesia.ai", "on": s.voice_engine == crate::settings::VoiceEngine::Cartesia, "note": "Only when the voice is set to Cartesia: each sentence is sent to be spoken."}),
         json!({"name": "Model downloads", "host": "huggingface.co, raw.githubusercontent.com", "on": true, "note": "Only when a pinned model file is missing."}),
         json!({"name": "Updates", "host": "none", "on": false, "note": "Not in this build."}),
         json!({"name": "Crash reports", "host": "none", "on": false, "note": "Not in this build; always opt-in."}),
@@ -68,7 +70,7 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
         endpoints.push(json!({"name": format!("MCP: {m}"), "host": "from ~/.markon/mcp.json", "on": true, "note": "Remove it from mcp.json to turn it off."}));
     }
     SettingsView {
-        keys: json!({"anthropic": has(accounts::ANTHROPIC), "openrouter": has(accounts::OPENROUTER)}),
+        keys: json!({"anthropic": has(accounts::ANTHROPIC), "openrouter": has(accounts::OPENROUTER), "cartesia": has(accounts::CARTESIA)}),
         models: p.models(),
         default_model: p.default_model(),
         mcp: crate::workspace::mcp_status(&core.tools),
@@ -91,6 +93,7 @@ pub fn settings_get(core: State<'_, CoreState>) -> SettingsView {
 #[derive(Deserialize, Default)]
 pub struct Patch {
     voice: Option<Voice>,
+    voice_engine: Option<crate::settings::VoiceEngine>,
     route: Option<Route>,
     model: Option<Option<String>>,
     hotkey: Option<String>,
@@ -298,6 +301,10 @@ pub fn settings_set(
         }
         s.voice = Some(v);
     }
+    let engine_changed = patch.voice_engine.is_some_and(|e| e != s.voice_engine);
+    if let Some(e) = patch.voice_engine {
+        s.voice_engine = e;
+    }
     let route_changed = patch.route.is_some_and(|r| r != s.route);
     if let Some(r) = patch.route {
         s.route = r;
@@ -357,6 +364,9 @@ pub fn settings_set(
         .set_provider(crate::core::provider_for(&s, core.platform.clone()));
     core.agent.set_model(s.model.clone());
     *core.settings.lock().expect("settings") = s;
+    if engine_changed && core.audio.is_ready() {
+        core.apply_voice_engine();
+    }
     // The private route follows the local settings too.
     if sources_changed || local_changed || route_changed {
         crate::sources::refresh(&core);
@@ -376,6 +386,21 @@ pub fn set_secret(core: State<'_, CoreState>, route: Route, value: String) -> Re
     core.platform
         .secret_set(a, value)
         .map_err(|e| e.to_string())?;
+    core.emit_status();
+    Ok(())
+}
+
+/// Stores the Cartesia key and switches to it at once if Cartesia is the chosen engine.
+#[tauri::command]
+pub fn set_voice_key(core: State<'_, CoreState>, value: String) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 512 || value.chars().any(char::is_whitespace) {
+        return Err("that does not look like an API key".into());
+    }
+    core.platform
+        .secret_set(accounts::CARTESIA, value)
+        .map_err(|e| e.to_string())?;
+    core.apply_voice_engine();
     core.emit_status();
     Ok(())
 }
@@ -491,6 +516,7 @@ pub fn wipe_all(core: State<'_, CoreState>) -> Result<(), String> {
         accounts::ANTHROPIC,
         accounts::OPENROUTER,
         accounts::RELAY_TOKEN,
+        accounts::CARTESIA,
     ] {
         core.platform.secret_delete(a).map_err(|e| e.to_string())?;
     }

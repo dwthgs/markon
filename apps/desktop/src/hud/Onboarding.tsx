@@ -10,7 +10,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const { view, save } = useSettings();
   const [step, setStep] = useState(0);
   const [voice, setVoice] = useState<Voice>('markon');
-  const [route, setRoute] = useState<Route>('anthropic');
+  const [picked, setRoute] = useState<Route | null>(null);
+  // Starts on what the core chose: Claude Code when it is signed in on this Mac.
+  const route = picked ?? view?.settings.route ?? 'anthropic';
   const [mic, setMic] = useState<'unknown' | 'ok' | 'denied'>('unknown');
   const [folders, setFolders] = useState<string[]>([]);
 

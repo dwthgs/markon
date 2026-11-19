@@ -1,0 +1,11 @@
+[
+  { "command": "hide", "phrases": ["hide", "hide yourself", "go away", "hide the window"] },
+  { "command": "quit", "phrases": ["quit", "quit markon", "quit markan", "exit"] },
+  { "command": "settings", "phrases": ["settings", "open settings", "show settings"] },
+  { "command": "tidy", "phrases": ["tidy up", "tidy"] },
+  { "command": "clear", "phrases": ["clear the screen", "clear screen", "clear view", "clear the view"] },
+  { "command": "standby", "phrases": ["standby", "stand by", "on standby", "stand b", "stand bye"] },
+  { "command": "bigger", "phrases": ["bigger", "make it bigger"] },
+  { "command": "theme", "arg": "ares", "phrases": ["hacker mode", "hacker mode on"] },
+  { "command": "theme", "arg": "tron", "phrases": ["normal mode", "hacker mode off"] }
+]

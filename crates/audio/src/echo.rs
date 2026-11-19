@@ -1,5 +1,5 @@
 //! Talking over Markon: WebRTC's echo canceller removes Markon's own voice from the
-//! microphone, and what is left is checked for sustained speech.
+//! microphone, and `barge` decides whether what is left is the user speaking.
 use webrtc_audio_processing::Processor;
 use webrtc_audio_processing::config::{Config, EchoCanceller, HighPassFilter};
 
@@ -43,53 +43,6 @@ impl Echo {
     /// One microphone frame of `frame_len()` samples, cleaned in place.
     pub fn clean(&mut self, frame: &mut [f32]) {
         let _ = self.ap.process_capture_frame([frame]);
-    }
-}
-
-/// Speech in the cleaned signal, in two stages: a hint (duck Markon's voice at once) and a confirmed
-/// barge-in (stop). Judged over the last 350 ms.
-#[derive(Default)]
-pub struct BargeIn {
-    window: std::collections::VecDeque<bool>,
-    noise: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Barge {
-    Quiet,
-    /// A few voiced frames: maybe the user, maybe a noise.
-    Hint,
-    /// Sustained speech: the user is talking over Markon.
-    Confirmed,
-}
-
-const WINDOW_FRAMES: usize = 35;
-const HINT_FRAMES: usize = 5;
-// A cough, a click or a burst of echo is shorter than this; a person starting to talk is not.
-const CONFIRM_FRAMES: usize = 25;
-const MIN_LEVEL: f32 = 0.02;
-
-impl BargeIn {
-    /// Feed one cleaned 10 ms frame.
-    pub fn push(&mut self, frame: &[f32]) -> Barge {
-        let rms = (frame.iter().map(|x| x * x).sum::<f32>() / frame.len().max(1) as f32).sqrt();
-        let voiced = rms > MIN_LEVEL.max(self.noise * 4.0);
-        if !voiced {
-            self.noise += (rms - self.noise) * 0.05;
-        }
-        if self.window.len() == WINDOW_FRAMES {
-            self.window.pop_front();
-        }
-        self.window.push_back(voiced);
-        match self.window.iter().filter(|v| **v).count() {
-            n if n >= CONFIRM_FRAMES => Barge::Confirmed,
-            n if n >= HINT_FRAMES => Barge::Hint,
-            _ => Barge::Quiet,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.window.clear();
     }
 }
 
@@ -145,38 +98,58 @@ mod tests {
         assert!(gain < 0.1, "echo left at {:.1}% of its level", gain * 100.0);
     }
 
-    #[test]
-    fn hints_within_50_ms_and_confirms_within_250_ms() {
-        let mut b = BargeIn::default();
-        let quiet = vec![0.005f32; 160];
-        let loud: Vec<f32> = (0..160).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
-        assert!(
-            (0..100).all(|_| b.push(&quiet) == Barge::Quiet),
-            "residual echo"
-        );
-        let states: Vec<Barge> = (0..30).map(|_| b.push(&loud)).collect();
-        assert_eq!(
-            states.iter().position(|s| *s == Barge::Hint),
-            Some(HINT_FRAMES - 1)
-        );
-        assert_eq!(
-            states.iter().position(|s| *s == Barge::Confirmed),
-            Some(CONFIRM_FRAMES - 1)
-        );
+    /// Echo left in each 250 ms of a reply: a 30 ms, half-level echo of what was played.
+    fn reply(e: &mut Echo, rate: usize, seed: u32, secs: usize) -> Vec<f32> {
+        let f = e.frame_len();
+        let played = noise(rate * secs, seed);
+        let delay = rate * 30 / 1000;
+        let (mut raw, mut left, mut out) = (0.0f32, 0.0f32, Vec::new());
+        for (i, chunk) in played.chunks_exact(f).enumerate() {
+            e.played(chunk);
+            let start = i * f;
+            let mut mic: Vec<f32> = (start..start + f)
+                .map(|k| {
+                    if k >= delay {
+                        0.5 * played[k - delay]
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            raw += rms(&mic);
+            e.clean(&mut mic);
+            left += rms(&mic);
+            if (i + 1) % 25 == 0 {
+                out.push(left / raw.max(1e-9));
+                (raw, left) = (0.0, 0.0);
+            }
+        }
+        out
+    }
+
+    /// Ten seconds of silence between two replies, with or without the microphone fed meanwhile.
+    fn second_reply(mic_fed: bool) -> Vec<f32> {
+        let rate = 16_000usize;
+        let mut e = Echo::new(rate as u32).unwrap();
+        let f = e.frame_len();
+        reply(&mut e, rate, 1, 6);
+        for _ in 0..1000 {
+            e.played(&vec![0.0; f]);
+            if mic_fed {
+                e.clean(&mut vec![0.0; f]);
+            }
+        }
+        reply(&mut e, rate, 2, 3)
     }
 
     #[test]
-    fn a_click_only_hints_and_then_fades() {
-        let mut b = BargeIn::default();
-        let quiet = vec![0.005f32; 160];
-        let loud: Vec<f32> = (0..160).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
-        (0..50).for_each(|_| {
-            b.push(&quiet);
-        });
-        let click: Vec<Barge> = (0..20).map(|_| b.push(&loud)).collect();
-        assert!(!click.contains(&Barge::Confirmed));
-        assert!(click.contains(&Barge::Hint));
-        let after: Vec<Barge> = (0..40).map(|_| b.push(&quiet)).collect();
-        assert_eq!(after.last(), Some(&Barge::Quiet));
+    fn the_next_reply_starts_clean_when_the_microphone_was_fed_between_replies() {
+        let left = second_reply(true);
+        assert!(
+            left.iter().all(|x| *x < 0.05),
+            "echo left per 250 ms: {left:?}"
+        );
+        // Why wake.rs feeds it: starved of the microphone, the canceller starts the reply deaf.
+        assert!(second_reply(false)[0] > 0.5);
     }
 }

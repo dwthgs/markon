@@ -247,6 +247,7 @@ pub fn run() {
             setup::settings_get,
             setup::settings_set,
             setup::set_secret,
+            setup::set_voice_key,
             setup::delete_secret,
             setup::validate_route,
             setup::preview_voice,

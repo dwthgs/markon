@@ -50,6 +50,14 @@
       "license": "Apache-2.0"
     },
     {
+      "id": "silero-vad",
+      "path": "vad/silero_vad.onnx",
+      "url": "https://raw.githubusercontent.com/snakers4/silero-vad/be95df9152c0d7618fa1edfeb296fc3dae32376f/src/silero_vad/data/silero_vad.onnx",
+      "size": 2327524,
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "license": "MIT"
+    },
+    {
       "id": "qwen2.5-1.5b-instruct",
       "path": "llm/qwen2.5-1.5b-instruct-q4_k_m.gguf",
       "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf",

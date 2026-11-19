@@ -3,6 +3,15 @@ use markon_audio::Voice;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// What Markon and Markan sound like: Kokoro on this Mac, or Cartesia online.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceEngine {
+    #[default]
+    Kokoro,
+    Cartesia,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Route {
@@ -14,6 +23,9 @@ pub enum Route {
     /// The built-in model, no server. Experimental.
     #[serde(rename = "builtin")]
     BuiltIn,
+    /// The Claude Code CLI signed in on this Mac: the user's Claude plan, no key.
+    #[serde(rename = "claudecode")]
+    ClaudeCode,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,6 +33,7 @@ pub enum Route {
 pub struct Settings {
     /// Chosen once at first launch. None until onboarding picks it.
     pub voice: Option<Voice>,
+    pub voice_engine: VoiceEngine,
     pub route: Route,
     /// Model id for the route; None = the route's default.
     pub model: Option<String>,
@@ -41,12 +54,15 @@ pub struct Settings {
     /// The local route's server and model. None picks a model that fits this Mac.
     pub local_url: String,
     pub local_model: Option<String>,
+    /// Set once Claude Code was found and the route moved to it, so a later choice sticks.
+    pub claude_code_switched: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             voice: None,
+            voice_engine: VoiceEngine::Kokoro,
             route: Route::Anthropic,
             model: None,
             hotkey: "Alt+Space".into(),
@@ -59,6 +75,7 @@ impl Default for Settings {
             watch: Default::default(),
             local_url: markon_provider::local::OLLAMA.into(),
             local_model: None,
+            claude_code_switched: false,
         }
     }
 }

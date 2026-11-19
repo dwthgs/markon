@@ -1,12 +1,13 @@
 //! Wires audio, agent and platform together and forwards their events to the UI.
-use crate::settings::{Route, Settings};
+use crate::settings::{Route, Settings, VoiceEngine};
 use crate::workspace::{self, HudPrompter, TurnCards};
-use markon_agent::{Agent, AgentConfig, AgentEvent, AgentState, StaticSection, UserTurn};
+use markon_agent::{Agent, AgentConfig, AgentEvent, AgentState, UserTurn};
 use markon_audio::sentences::SentenceQueue;
 use markon_audio::{Audio, AudioEvent, Voice, manifest::Manifest};
 use markon_memory::{FactOrigin, Memory, Source};
 use markon_platform::{MacOs, Platform, accounts};
 use markon_provider::anthropic::AnthropicDirect;
+use markon_provider::claude_code::{self, ClaudeCode};
 use markon_provider::{KeySource, ModelProvider};
 use markon_scheduler::{Delivery, Scheduler};
 use markon_tools::Runtime;
@@ -58,8 +59,14 @@ pub struct Core {
     muted: AtomicBool,
     sentences: Mutex<SentenceQueue>,
     reply_started: AtomicBool,
+    /// What Markon was saying when the user talked over it, until the next transcript.
+    cut_reply: Mutex<Option<String>>,
     queued_speech: AtomicBool,
     turn_done: AtomicBool,
+    /// This reply put something playing on screen: go quiet after it so the music can start.
+    media_started: Arc<AtomicBool>,
+    /// The spoken answer to the wake phrase is playing: listen when it ends, music or not.
+    wake_ack: AtomicBool,
     models_ready: AtomicBool,
     model_note: Mutex<String>,
     ptt: Mutex<crate::ptt::Ptt>,
@@ -79,6 +86,20 @@ pub struct Status {
     pub onboarded: bool,
     pub reduced_motion: bool,
     pub version: String,
+}
+
+/// The persona follows the voice that is speaking now, so switching from Markon to Markan in settings
+/// changes the name in the next reply without a restart.
+struct PersonaSection {
+    audio: Arc<Audio>,
+    /// The chosen voice, used until the speech engine has loaded.
+    fallback: Voice,
+}
+
+impl markon_agent::PromptSection for PersonaSection {
+    fn render(&self, _: &UserTurn) -> Option<String> {
+        Some(persona(self.audio.voice().unwrap_or(self.fallback)))
+    }
 }
 
 fn persona(voice: Voice) -> String {
@@ -114,6 +135,16 @@ fn persona(voice: Voice) -> String {
          them without asking the user first.",
         name = voice.name()
     )
+}
+
+/// A finished card that begins to play: audio, video, or Spotify told to play (not paused).
+fn starts_media(c: &Card) -> bool {
+    c.status == CardStatus::Done
+        && match c.kind {
+            CardKind::Audio | CardKind::Video => true,
+            CardKind::Music => c.body["state"] == "playing",
+            _ => false,
+        }
 }
 
 /// Let the window load exactly the local file a picture or media card shows, and nothing else
@@ -262,6 +293,10 @@ pub fn provider_for(settings: &Settings, platform: Arc<MacOs>) -> Arc<dyn ModelP
             &local_model(settings),
         )),
         Route::BuiltIn => builtin(&platform.data_dir().join("models")),
+        // Not found: spawning plain `claude` fails with a clear "cannot start Claude Code".
+        Route::ClaudeCode => Arc::new(ClaudeCode::new(
+            claude_code::find().unwrap_or_else(|| "claude".into()),
+        )),
         Route::Relay => {
             let p = platform.clone();
             let store: markon_provider::relay::TokenStore = Arc::new(move |t| {
@@ -297,6 +332,15 @@ impl Core {
             settings.device_id = Some(crate::settings::random_id());
             let _ = settings.save(&dir);
         }
+        // Claude Code on this Mac replaces the API key, once: a route picked later is kept.
+        if !settings.claude_code_switched && claude_code::find().is_some() {
+            settings.claude_code_switched = true;
+            if settings.route == Route::Anthropic {
+                settings.route = Route::ClaudeCode;
+                settings.model = None;
+            }
+            let _ = settings.save(&dir);
+        }
         if !Settings::path(&dir).exists()
             && let Err(e) = settings.save(&dir)
         {
@@ -329,14 +373,19 @@ impl Core {
         let conv: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
         let turn_card_ids: Arc<Mutex<HashMap<u64, Vec<String>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let (card_app, card_mem, card_conv, card_ids) = (
+        let media_started = Arc::new(AtomicBool::new(false));
+        let (card_app, card_mem, card_conv, card_ids, card_media) = (
             app.clone(),
             memory.clone(),
             conv.clone(),
             turn_card_ids.clone(),
+            media_started.clone(),
         );
         let card_sink: Arc<dyn Fn(Card) + Send + Sync> = Arc::new(move |c: Card| {
             allow_media(&card_app, &c.body);
+            if starts_media(&c) {
+                card_media.store(true, Ordering::SeqCst);
+            }
             let _ = card_app.emit(workspace::EV_CARD, &c);
             // Cards persist per conversation so History can bring them back.
             if let Some(cv) = *card_conv.lock().expect("conv") {
@@ -438,7 +487,10 @@ impl Core {
                 ..AgentConfig::default()
             },
         );
-        agent.add_section(Arc::new(StaticSection(persona(voice))));
+        agent.add_section(Arc::new(PersonaSection {
+            audio: audio.clone(),
+            fallback: voice,
+        }));
         agent.add_section(Arc::new(crate::remember::RecallSection(memory.clone())));
         agent.add_section(Arc::new(markon_tools::skills::CatalogSection(
             skills.clone(),
@@ -475,8 +527,11 @@ impl Core {
             muted: AtomicBool::new(false),
             sentences: Mutex::new(SentenceQueue::new(MAX_SENTENCES)),
             reply_started: AtomicBool::new(false),
+            cut_reply: Mutex::new(None),
             queued_speech: AtomicBool::new(false),
             turn_done: AtomicBool::new(true),
+            media_started,
+            wake_ack: AtomicBool::new(false),
             models_ready: AtomicBool::new(false),
             model_note: Mutex::new("Checking speech models".into()),
             ptt: Mutex::new(crate::ptt::Ptt::default()),
@@ -533,7 +588,7 @@ impl Core {
                     .ok()
                     .flatten()
                     .is_some(),
-                Route::Relay | Route::Local | Route::BuiltIn => true,
+                Route::Relay | Route::Local | Route::BuiltIn | Route::ClaudeCode => true,
             },
             voice: s.voice,
             route: s.route,
@@ -552,6 +607,25 @@ impl Core {
     /// The status line's note, for long work started from settings (the built-in model download).
     pub fn note_public(&self, n: String) {
         self.note(n);
+    }
+
+    /// Speak through the engine settings name. Cartesia without a key stays on Kokoro and says why.
+    pub fn apply_voice_engine(&self) {
+        let (engine, voice) = {
+            let s = self.settings.lock().expect("settings");
+            (s.voice_engine, s.voice.unwrap_or(Voice::Markon))
+        };
+        let online = match engine {
+            VoiceEngine::Kokoro => None,
+            VoiceEngine::Cartesia => match self.platform.secret_get(accounts::CARTESIA) {
+                Ok(Some(key)) => Some(markon_audio::cartesia::Cartesia::new(key, voice)),
+                _ => {
+                    self.note("Cartesia needs its key in Settings. Speaking with Kokoro.");
+                    None
+                }
+            },
+        };
+        self.audio.set_online(online);
     }
 
     fn note(&self, n: impl Into<String>) {
@@ -586,12 +660,16 @@ impl Core {
             }
         }
         self.note("Loading speech models");
-        match self.audio.load_models(&dir, voice) {
+        match self
+            .audio
+            .load_models(&dir, voice, &crate::voice_commands::vocabulary())
+        {
             Ok(()) => {
                 self.models_ready.store(true, Ordering::SeqCst);
                 self.note("");
                 // "Hey Markon" works once whisper is loaded.
                 self.audio.start_wake();
+                self.apply_voice_engine();
             }
             Err(e) => self.note(format!("Voice is off: {e}")),
         }
@@ -622,7 +700,7 @@ impl Core {
                     )
                     .with(CardStatus::Done, serde_json::json!({"text": t.text}));
                     (self.turn_cards_sink())(note);
-                    self.turn_done.store(true, Ordering::SeqCst);
+                    self.set_turn_done(true);
                     self.agent.set_state(AgentState::Idle);
                     return;
                 }
@@ -635,7 +713,7 @@ impl Core {
                     rest = vec![t.text.clone()];
                 }
                 self.speak_all(rest);
-                self.turn_done.store(true, Ordering::SeqCst);
+                self.set_turn_done(true);
                 // Nothing to play (no voice, or an empty reply): straight back to idle.
                 if !self.queued_speech.load(Ordering::SeqCst) && !self.audio.is_speaking() {
                     self.agent.set_state(AgentState::Idle);
@@ -651,7 +729,7 @@ impl Core {
                 }
                 self.audio.cancel_speech();
                 self.reset_reply();
-                self.turn_done.store(true, Ordering::SeqCst);
+                self.set_turn_done(true);
             }
             _ => {}
         }
@@ -669,6 +747,12 @@ impl Core {
         }
     }
 
+    /// While a turn runs, what the user says reaches Markon without the wake phrase.
+    fn set_turn_done(&self, done: bool) {
+        self.turn_done.store(done, Ordering::SeqCst);
+        self.audio.set_attentive(!done);
+    }
+
     fn reset_reply(&self) {
         *self.sentences.lock().expect("sentences") = SentenceQueue::new(MAX_SENTENCES);
         self.reply_started.store(false, Ordering::SeqCst);
@@ -676,6 +760,20 @@ impl Core {
     }
 
     fn on_audio(self: &Arc<Self>, e: &AudioEvent) {
+        if matches!(
+            e,
+            AudioEvent::PlaybackStarted
+                | AudioEvent::PlaybackEnded
+                | AudioEvent::BargeIn
+                | AudioEvent::Error { .. }
+        ) {
+            eprintln!(
+                "[voice] {:?} turn_done={} listening={}",
+                e,
+                self.turn_done.load(Ordering::SeqCst),
+                self.audio.is_listening()
+            );
+        }
         match e {
             AudioEvent::PlaybackStarted => {
                 self.agent.set_state(AgentState::Speaking);
@@ -689,7 +787,11 @@ impl Core {
                     && !self.audio.is_listening()
                     && !self.audio.is_speaking() =>
             {
-                let session = matches!(e, AudioEvent::PlaybackEnded)
+                // Media is silent while Markon listens. After "Playing ..." it should start
+                // at once, so that reply gets no follow-up window: the wake phrase opens the microphone.
+                let started = self.media_started.swap(false, Ordering::SeqCst);
+                let quiet = self.wake_ack.swap(false, Ordering::SeqCst) || !started;
+                let session = (quiet && matches!(e, AudioEvent::PlaybackEnded))
                     .then(|| {
                         let mut p = self.ptt.lock().expect("ptt");
                         p.open_window(Instant::now(), crate::ptt::FOLLOW_UP);
@@ -716,13 +818,20 @@ impl Core {
                 let c = self.clone();
                 if crate::ptt::is_stop(rest) {
                     self.stop();
-                } else if rest.split_whitespace().count() >= 2 {
-                    // "Hey Markon, what's the weather": the request came in the same breath.
+                } else if rest.split_whitespace().count() >= 2
+                    || crate::voice_commands::parse(rest).is_some()
+                {
+                    // "Hey Markon, what's the weather" or "Hey Markon, standby": it came in the same breath.
                     let text = rest.clone();
                     tauri::async_runtime::spawn(async move {
                         crate::show_window(&c.app);
                         c.submit(UserTurn::voice(&text)).await;
                     });
+                } else if self.agent.state() == AgentState::Idle && self.ack_wake() {
+                    // Answered out loud: the microphone opens when the word has played (PlaybackEnded).
+                    crate::show_window(&self.app);
+                } else if !rest.is_empty() {
+                    // One stray word while Markon works ("right"): not a reason to drop the turn.
                 } else if let Some(session) = self.ptt.lock().expect("ptt").follow_up() {
                     tauri::async_runtime::spawn_blocking(move || {
                         c.start_listening(session, crate::ptt::NO_SPEECH)
@@ -737,6 +846,13 @@ impl Core {
                     p.speech_started();
                     s
                 };
+                // History keeps only the sentences that played, and the next turn is told.
+                // A local reply ("Yes?") has no turn in the history to trim.
+                let (played, heard) = self.audio.spoken();
+                if self.reply_started.load(Ordering::SeqCst) {
+                    self.agent.interrupted(&played);
+                }
+                *self.cut_reply.lock().expect("cut reply") = Some(heard);
                 // Always stop, even if a hands-free session is already opening (it then takes the speech).
                 self.audio.cancel_speech();
                 self.agent.cancel();
@@ -754,6 +870,17 @@ impl Core {
             }
             _ => {}
         }
+    }
+
+    /// Say "Yes?" to the wake phrase. False when the voice is not loaded: listen silently instead.
+    fn ack_wake(&self) -> bool {
+        self.wake_ack.store(true, Ordering::SeqCst);
+        self.set_turn_done(true);
+        let spoke = self.audio.speak("Yes?").is_ok();
+        if !spoke {
+            self.wake_ack.store(false, Ordering::SeqCst);
+        }
+        spoke
     }
 
     /// Stop whatever Markon is doing: speech, the running reply, and a "thinking" with nothing behind it.
@@ -784,6 +911,7 @@ impl Core {
             }
             crate::ptt::Action::Finish => self.finish_listening(),
             crate::ptt::Action::Abandon => {
+                self.cut_reply.lock().expect("cut reply").take();
                 let audio = self.audio.clone();
                 let c = self.clone();
                 tauri::async_runtime::spawn_blocking(move || {
@@ -796,6 +924,10 @@ impl Core {
     }
 
     fn start_listening(self: &Arc<Self>, session: u64, no_speech: std::time::Duration) {
+        eprintln!(
+            "[voice] listening opens (speaking={})",
+            self.audio.is_speaking()
+        );
         if self.audio.is_speaking() || self.agent.state() == AgentState::Thinking {
             self.audio.cancel_speech();
             self.agent.cancel();
@@ -828,6 +960,24 @@ impl Core {
                 Ok(Err(e)) => eprintln!("[ptt] transcription failed: {e}"),
                 Err(e) => eprintln!("[ptt] transcription task failed: {e}"),
             }
+            // After a barge-in, nothing, a filler or Markon's own words mean a false stop: no model
+            // call and no resumed reply, back to listening quietly.
+            let said = c.cut_reply.lock().expect("cut reply").take();
+            let text = match text {
+                Ok(Ok(t))
+                    if said.as_deref().is_some_and(|said| {
+                        !markon_audio::wake::is_words(&t)
+                            || markon_audio::wake::is_own_words(&t, said)
+                    }) =>
+                {
+                    eprintln!(
+                        "[barge] false stop: {} chars heard were not the user",
+                        t.trim().len()
+                    );
+                    Ok(Ok(String::new()))
+                }
+                other => other,
+            };
             match text {
                 Ok(Ok(t)) if !t.trim().is_empty() => {
                     c.ptt.lock().expect("ptt").close_window();
@@ -924,7 +1074,7 @@ impl Core {
             return;
         }
         self.reset_reply();
-        self.turn_done.store(false, Ordering::SeqCst);
+        self.set_turn_done(false);
         *self.last_user.lock().expect("last_user") = turn.text.clone();
         {
             let mut t = self.trace.lock().expect("trace");
@@ -1048,7 +1198,7 @@ impl Core {
         );
         self.agent.set_state(AgentState::Thinking);
         self.reset_reply();
-        self.turn_done.store(true, Ordering::SeqCst);
+        self.set_turn_done(true);
         self.audio.begin_reply();
         self.speak_all(vec![text.to_string()]);
         if !self.queued_speech.load(Ordering::SeqCst) {
@@ -1085,7 +1235,7 @@ impl Core {
             self.muted.store(true, Ordering::SeqCst);
         }
         self.reset_reply();
-        self.turn_done.store(false, Ordering::SeqCst);
+        self.set_turn_done(false);
         *self.last_user.lock().expect("last_user") = name.to_string();
         self.agent
             .submit(UserTurn::agent(

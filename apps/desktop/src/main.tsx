@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { startFpsProbe } from './lib/fpsProbe';
 import './components/thegridcn-theme.css';
+import './components/thegridcn-theme-ares.css';
 import './styles.css';
 
 if (import.meta.env.DEV && new URLSearchParams(location.search).has('e2e')) {

@@ -11,6 +11,8 @@
 /* Markon field colour overrides the GridCN Tron background. */
 :root {
   --background: #03060c;
+  --field-glow: #071624;
+  --core-filter: none;
 }
 
 @theme inline {

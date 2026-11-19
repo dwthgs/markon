@@ -31,7 +31,11 @@ fn main() {
     // Final transcript: the clip as a 48 kHz mic would deliver it, resampled then transcribed.
     let clip = read_wav16(&a[2]);
     let mic = resample(&clip, 16_000, 48_000);
-    let mut w = Whisper::load(&m.entry("whisper-base.en").unwrap().verify(&dir).unwrap()).unwrap();
+    let mut w = Whisper::load(
+        &m.entry("whisper-base.en").unwrap().verify(&dir).unwrap(),
+        "",
+    )
+    .unwrap();
     for run in 0..3 {
         let t = Instant::now();
         let text = w.transcribe(&resample(&mic, 48_000, 16_000)).unwrap();
@@ -50,7 +54,9 @@ fn main() {
         }
     }));
     let t = Instant::now();
-    audio.load_models(&dir, Voice::Markon).expect("models load");
+    audio
+        .load_models(&dir, Voice::Markon, "")
+        .expect("models load");
     println!("load whisper + kokoro + voice: {:?}", t.elapsed());
 
     // First audio: from a complete first sentence to playback start (synthesis of the first chunk + device open).

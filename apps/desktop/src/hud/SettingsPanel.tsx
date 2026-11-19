@@ -71,6 +71,40 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             {v === 'markon' ? 'Markon' : 'Markan'}
           </label>
         ))}
+        <div className="mt-2">
+          {(
+            [
+              ['kokoro', 'On this Mac (Kokoro)'],
+              ['cartesia', 'Online (Cartesia)'],
+            ] as const
+          ).map(([e, label]) => (
+            <label key={e} className="mr-4">
+              <input
+                type="radio"
+                name="s-voice-engine"
+                checked={s.voice_engine === e}
+                onChange={() => void attempt(() => save({ voice_engine: e }))}
+              />{' '}
+              {label}
+            </label>
+          ))}
+        </div>
+        {s.voice_engine === 'cartesia' ? (
+          <>
+            <p className="mt-1 text-white/45">
+              Each sentence Markon says is sent to Cartesia to be spoken. Needs the internet.
+            </p>
+            {view.keys.cartesia ? <p className="mt-1">Cartesia key saved in the keychain.</p> : null}
+            <KeyField
+              label={view.keys.cartesia ? 'Replace Cartesia API key' : 'Cartesia API key'}
+              onSaved={reload}
+              store={async (value) => {
+                await call('set_voice_key', { value });
+                return 'Saved. Say something to hear it.';
+              }}
+            />
+          </>
+        ) : null}
       </Section>
 
       <Section title="MODEL ROUTE">

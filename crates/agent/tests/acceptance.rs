@@ -316,6 +316,71 @@ async fn cancelling_after_the_user_interrupted_keeps_listening() {
     assert_eq!(states(&ev).last(), Some(&AgentState::Listening));
 }
 
+fn texts(m: &Message) -> String {
+    m.content
+        .iter()
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// talked over after the reply finished streaming, history keeps only the sentences that
+/// played, and the next turn tells the model it was interrupted.
+#[tokio::test]
+async fn talked_over_after_streaming_keeps_only_what_was_spoken_and_notes_it() {
+    let (a, fake, mut rx) = agent(vec![
+        FakeProvider::text("Your meeting is on Thursday. It is at three. Sara will be there."),
+        FakeProvider::text("Friday then."),
+    ]);
+    a.submit(UserTurn::voice("when is my meeting")).await;
+    drain(&mut rx).await;
+    a.interrupted("Your meeting is on Thursday.");
+    let h = a.history();
+    assert_eq!(h.len(), 2);
+    assert_eq!(texts(&h[1]), "Your meeting is on Thursday.");
+    a.submit(UserTurn::voice("no, Friday")).await;
+    let req = fake.requests.lock().unwrap().last().cloned().unwrap();
+    let sent = texts(req.messages.last().unwrap());
+    assert_eq!(sent, format!("{SPEECH_INTERRUPTED_NOTE} no, Friday"));
+    // The note goes on that one turn only.
+    assert_eq!(texts(&a.history()[2]), sent);
+}
+
+#[tokio::test]
+async fn talked_over_while_streaming_keeps_the_question_and_what_was_spoken() {
+    let mut fake = FakeProvider::new(vec![FakeProvider::text(
+        "One sentence. Another sentence that is still streaming slowly.",
+    )]);
+    fake.delay = Duration::from_millis(30);
+    let (a, mut rx) = Agent::new(Arc::new(fake), Arc::new(Tools), AgentConfig::default());
+    let a = Arc::new(a);
+    let a2 = a.clone();
+    let h = tokio::spawn(async move { a2.submit(UserTurn::voice("tell me")).await });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    a.interrupted("One sentence.");
+    h.await.unwrap();
+    let ev = drain(&mut rx).await;
+    assert!(
+        ev.iter()
+            .any(|e| matches!(e, AgentEvent::TurnCancelled { .. }))
+    );
+    let h = a.history();
+    assert_eq!(h.len(), 2, "{h:?}");
+    assert_eq!(texts(&h[0]), "tell me");
+    assert_eq!(texts(&h[1]), "One sentence.");
+}
+
+#[tokio::test]
+async fn talked_over_before_a_sentence_finished_keeps_no_reply() {
+    let (a, _, mut rx) = agent(vec![FakeProvider::text("A long first sentence.")]);
+    a.submit(UserTurn::voice("hi")).await;
+    drain(&mut rx).await;
+    a.interrupted("");
+    let h = a.history();
+    assert_eq!(h.len(), 1);
+    assert_eq!(texts(&h[0]), "hi");
+}
+
 #[tokio::test]
 async fn a_paused_server_search_is_resumed_without_a_new_user_message() {
     let mut paused = FakeProvider::text("Looking.");

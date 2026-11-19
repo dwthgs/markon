@@ -10,7 +10,7 @@ export interface Status {
   model_note: string;
   has_key: boolean;
   voice: 'markon' | 'markan' | null;
-  route: 'anthropic' | 'openrouter' | 'relay' | 'local' | 'builtin';
+  route: 'anthropic' | 'openrouter' | 'relay' | 'local' | 'builtin' | 'claudecode';
   listening: boolean;
   hotkey: string;
   onboarded: boolean;

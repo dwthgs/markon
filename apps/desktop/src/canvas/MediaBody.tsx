@@ -5,9 +5,9 @@ import { cn } from '@/lib/utils';
 import type { Card } from './types';
 import { MEDIA_EVENT, picked } from './useCards';
 
-/** True while Markon listens, thinks or speaks: media plays quietly underneath. */
+/** True while Markon listens, thinks or speaks: media goes silent so the microphone hears only the user. */
 export const DuckContext = createContext(false);
-const DUCKED = 0.2;
+const DUCKED = 0;
 
 /** A local file the core allowed for this card (the asset protocol's scope starts empty). */
 function fileSrc(path: string) {
@@ -125,7 +125,13 @@ const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60))
 
 function Spotify({ card }: { card: Card }) {
   const [np, setNp] = useState<NowPlaying>(card.body);
-  useEffect(() => setNp(card.body), [card.body]);
+  const ducked = useContext(DuckContext);
+  // Markon paused it to listen or talk, and owes a resume. A new card body is Markon's own command and wins.
+  const held = useRef(false);
+  useEffect(() => {
+    setNp(card.body);
+    held.current = false;
+  }, [card.body]);
   useEffect(() => {
     if (!inTauri()) return;
     const poll = async () => {
@@ -140,6 +146,16 @@ function Spotify({ card }: { card: Card }) {
     if (n) setNp(n);
   };
   const playing = np.state === 'playing';
+  // Spotify's volume is not Markon's to lower, so it pauses while Markon is busy and resumes after.
+  useEffect(() => {
+    if (ducked && playing && !held.current) {
+      held.current = true;
+      void call('spotify_control', { action: 'pause' });
+    } else if (!ducked && held.current) {
+      held.current = false;
+      void call('spotify_control', { action: 'play' });
+    }
+  }, [ducked, playing]);
   const pct = np.duration_s ? Math.min(100, (np.position_s / np.duration_s) * 100) : 0;
   return (
     <div className="relative flex h-full">

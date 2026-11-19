@@ -13,6 +13,8 @@ pub mod accounts {
     pub const GITHUB: &str = "github-token";
     pub const TELEGRAM_API_HASH: &str = "telegram-api-hash";
     pub const TELEGRAM_SESSION: &str = "telegram-session";
+    /// The hosted voice.
+    pub const CARTESIA: &str = "cartesia-api-key";
 }
 
 #[derive(Debug, thiserror::Error)]

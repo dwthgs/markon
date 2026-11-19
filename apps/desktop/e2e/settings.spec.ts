@@ -9,7 +9,7 @@ const onboarded = {
     voice: 'markon',
     approved_folders: ['/Users/me/Notes'],
   },
-  keys: { anthropic: true, openrouter: false },
+  keys: { anthropic: true, openrouter: false, cartesia: false },
 };
 
 test.beforeEach(async ({ page }) => {
@@ -55,6 +55,29 @@ test('keys are stored in the keychain and can be removed', async ({ page }) => {
   await expect(panel).toContainText(/anthropic key: saved in keychain/i);
   await panel.getByRole('button', { name: 'Remove Anthropic key' }).click();
   expect(await calls(page, 'delete_secret')).toEqual([{ route: 'anthropic' }]);
+});
+
+test('the voice can be switched to Cartesia, whose key goes to the keychain', async ({ page }) => {
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await panel.getByRole('radio', { name: /online \(cartesia\)/i }).click();
+  expect((await calls(page, 'settings_set')).at(-1)).toEqual({ patch: { voice_engine: 'cartesia' } });
+});
+
+test('with Cartesia chosen, its key is saved through its own command', async ({ page }) => {
+  await open(page, '', {
+    settings_get: { ...onboarded, settings: { ...onboarded.settings, voice_engine: 'cartesia' } },
+  });
+  await expect(async () => {
+    await page.evaluate(() => window.__e2e.emit('markon://menu', 'settings'));
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  const panel = page.getByRole('dialog', { name: 'Settings' });
+  await expect(panel).toContainText('sent to Cartesia');
+  await panel.getByLabel('Cartesia API key').fill('sk_car_test');
+  await panel.getByLabel('Cartesia API key').press('Enter');
+  await expect(panel).toContainText('Saved. Say something to hear it.');
+  expect(await calls(page, 'set_voice_key')).toEqual([{ value: 'sk_car_test' }]);
+  expect(await calls(page, 'set_secret')).toEqual([]);
 });
 
 test('folders can be added and removed', async ({ page }) => {
