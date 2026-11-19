@@ -5,16 +5,19 @@ use tauri::Emitter;
 
 pub const EV_COMMAND: &str = "markon://command";
 
-/// One row of `voice_commands.json`: any of `phrases` runs `command` with `arg`.
+/// One row of `voice_commands.json`: any of `phrases` runs `command` with `arg`. A `strict` command
+/// (quit) matches only as written; the rest also match a close mishearing.
 #[derive(serde::Deserialize)]
 struct Entry {
     command: String,
     #[serde(default)]
     arg: String,
     phrases: Vec<String>,
+    #[serde(default)]
+    strict: bool,
 }
 
-/// Exact-phrase commands. Add a phrase or a command by editing `voice_commands.json`.
+/// Commands by phrase. Add a phrase or a command by editing `voice_commands.json`.
 static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
     let mut t: Vec<Entry> = serde_json::from_str(include_str!("voice_commands.json"))
         .expect("voice_commands.json is valid");
@@ -103,6 +106,9 @@ fn parse_one(text: &str) -> Option<(&'static str, String)> {
         if let Some(e) = TABLE.iter().find(|e| e.phrases.iter().any(|p| p == c)) {
             return Some((e.command.as_str(), e.arg.clone()));
         }
+        if let Some(e) = closest(c) {
+            return Some((e.command.as_str(), e.arg.clone()));
+        }
         match VERB.iter().find_map(|v| c.strip_prefix(v)) {
             Some(rest) => c = rest,
             None => break,
@@ -115,6 +121,57 @@ fn parse_one(text: &str) -> Option<(&'static str, String)> {
         return Some(("focus", rest.to_string()));
     }
     None
+}
+
+/// Letters only: "stand-by", "stand by" and "standby" are the same word to whisper.
+fn squash(t: &str) -> Vec<char> {
+    t.chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+fn edits(a: &[char], b: &[char]) -> usize {
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur.push(
+                (prev[j] + usize::from(ca != cb))
+                    .min(prev[j + 1] + 1)
+                    .min(cur[j] + 1),
+            );
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+/// The one command a short utterance is close to: one wrong letter per five, never more words than
+/// the phrase plus one, nothing for a strict command, and nothing when two commands are as close.
+fn closest(text: &str) -> Option<&'static Entry> {
+    let heard = squash(text);
+    let words = text.split_whitespace().count();
+    let mut best: Option<(usize, &Entry)> = None;
+    let mut tie = false;
+    for e in TABLE.iter().filter(|e| !e.strict) {
+        for p in &e.phrases {
+            let want = squash(p);
+            if words > p.split_whitespace().count() + 1 {
+                continue;
+            }
+            let d = edits(&heard, &want);
+            if d > want.len() / 5 {
+                continue;
+            }
+            match best {
+                Some((bd, be)) if d == bd && be.command != e.command => tie = true,
+                Some((bd, _)) if d >= bd => {}
+                _ => {
+                    best = Some((d, e));
+                    tie = false;
+                }
+            }
+        }
+    }
+    best.filter(|_| !tie).map(|(_, e)| e)
 }
 
 /// Returns true when the phrase was a command and has been handled.
@@ -201,6 +258,43 @@ mod tests {
             "Stand by. Go to Stand by.",
         ] {
             assert_eq!(parse(heard), Some(("standby", String::new())), "{heard}");
+        }
+    }
+
+    /// Commands match by closeness, so whisper's mishearings need no phrase of their own.
+    #[test]
+    fn near_misses_match_without_their_own_phrase() {
+        for p in super::TABLE.iter().flat_map(|e| &e.phrases) {
+            assert!(!["stand b", "stand bye"].contains(&p.as_str()), "{p}");
+        }
+        for heard in ["Stand bye.", "Go to stand b", "Standbye", "Stand buy."] {
+            assert_eq!(parse(heard), Some(("standby", String::new())), "{heard}");
+        }
+        assert_eq!(parse("Hacker mood."), Some(("theme", "ares".into())));
+        assert_eq!(parse("Setting."), Some(("settings", String::new())));
+        assert_eq!(parse("Clear the scream"), Some(("clear", String::new())));
+    }
+
+    #[test]
+    fn quit_needs_the_exact_word() {
+        assert_eq!(parse("Quit."), Some(("quit", String::new())));
+        assert_eq!(parse("Exit"), Some(("quit", String::new())));
+        for heard in ["Quiet.", "Quits", "Exits", "Quit Marco", "Edit"] {
+            assert_eq!(parse(heard), None, "{heard}");
+        }
+    }
+
+    #[test]
+    fn a_sentence_that_contains_a_command_is_not_one() {
+        for heard in [
+            "Could you tell me what standby mode does on a TV?",
+            "I want to tidy up my desktop folder later",
+            "Make the font in this document bigger",
+            "Hide and seek rules",
+            "Stand up straight",
+            "Settings for my router",
+        ] {
+            assert_eq!(parse(heard), None, "{heard}");
         }
     }
 
