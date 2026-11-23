@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#03060c" />
+    <title>Markon · a voice for your Mac</title>
+    <meta
+      name="description"
+      content="Markon is a voice assistant for the Mac. It hears you on the device, thinks with the model you choose, acts on your apps with your approval, and shows its work as cards around a living core."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body data-scene="hero">
+    <a class="skip" href="#hear">Skip to content</a>
+
+    <!-- The core is the page's spine: fixed at the centre for the whole scroll, like in the app. -->
+    <!-- Eclipse recolours the core by brightness into Ares red, so its white lines stay red, not pink. -->
+    <svg class="sr" aria-hidden="true">
+      <filter id="ares" color-interpolation-filters="sRGB">
+        <feColorMatrix
+          type="matrix"
+          values="0.27 0.9 0.1 0 0  0.05 0.18 0.02 0 0  0.05 0.2 0.03 0 0  0 0 0 1 0"
+        />
+      </filter>
+    </svg>
+    <div class="stage" aria-hidden="true">
+      <div class="field"></div>
+      <div class="core-wrap">
+        <canvas class="core" id="core"></canvas>
+        <svg class="orbit" viewBox="-500 -500 1000 1000" aria-hidden="true">
+          <circle r="430" class="orbit-ring" />
+          <circle r="470" class="orbit-ring orbit-ring--outer" />
+          <g class="orbit-nodes"></g>
+        </svg>
+      </div>
+    </div>
+
+    <header class="bar">
+      <a class="mark" href="#top" aria-label="Markon, back to top">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="10.5" />
+          <circle cx="12" cy="12" r="6" />
+          <circle cx="12" cy="12" r="1.6" class="mark-dot" />
+        </svg>
+        <span data-name>Markon</span>
+      </a>
+      <nav aria-label="Sections">
+        <a href="#hear">Hear</a>
+        <a href="#show">Show</a>
+        <a href="#act">Act</a>
+        <a href="#know">Know</a>
+        <a href="#modes">Modes</a>
+        <a href="#private">Private</a>
+      </nav>
+      <a class="btn btn--ghost" href="#get">Get it for Mac</a>
+    </header>
+
+    <main id="top">
+      <!-- HERO ------------------------------------------------------------ -->
+      <section class="scene hero" data-state="idle" data-label="Standby" aria-labelledby="hero-title">
+        <h1 id="hero-title" class="hero-title">
+          <span class="hero-l"><span class="line"><span>Say it.</span></span></span>
+          <span class="hero-r"><span class="line"><span>See it done.</span></span></span>
+        </h1>
+        <div class="hero-l hero-copy" data-reveal>
+          <p class="eyebrow">Voice assistant · macOS · Apple Silicon</p>
+          <p class="lede">
+            <span data-name>Markon</span> hears you on your Mac, thinks with the model you choose, works your apps and
+            accounts when you say yes, and lays out everything it does as cards around this core.
+          </p>
+        </div>
+        <div class="hero-r hero-copy" data-reveal>
+          <fieldset class="voice-pick">
+            <legend class="eyebrow">Pick a voice. The name follows it.</legend>
+            <label><input type="radio" name="voice" value="Markon" checked /><span>Markon</span><small>male voice</small></label>
+            <label><input type="radio" name="voice" value="Markan" /><span>Markan</span><small>female voice</small></label>
+            <i class="voice-pick-thumb" aria-hidden="true"></i>
+          </fieldset>
+          <a class="btn btn--solid" href="#get">Get <span data-name>Markon</span> for Mac</a>
+        </div>
+        <div class="hero-talk">
+          <button class="talk" id="talk" type="button" aria-pressed="false">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="9" rx="2.5" /><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2" /></svg>
+            <span class="talk-label">Talk to the core</span>
+          </button>
+          <p class="talk-note" id="talk-note" role="status">Your voice stays in this tab. Nothing is recorded.</p>
+        </div>
+      </section>
+
+      <!-- 01 HEAR ----------------------------------------------------------- -->
+      <section class="scene" id="hear" data-state="listening" data-label="Listening" aria-labelledby="hear-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>01</b> Hear</p>
+          <h2 id="hear-title">It listens on your Mac, not on a server.</h2>
+          <p class="said" aria-live="off"><span class="typed"></span><i class="caret"></i></p>
+          <p class="meta">On this Mac · <b data-count="350">350</b> ms to the final transcript</p>
+        </div>
+        <div class="col-r facts" data-reveal>
+          <dl>
+            <div>
+              <dt>Wake phrase or hotkey</dt>
+              <dd>Say “Hey <span data-name>Markon</span>”, or just “Hey Mark”, or hold a key. A short list of spoken commands works with no model at all: hide, tidy up, clear the screen, settings.</dd>
+            </div>
+            <div>
+              <dt>Patient with pauses</dt>
+              <dd>It waits longer when your sentence stops mid-clause, so thinking out loud does not get cut off.</dd>
+            </div>
+            <div>
+              <dt>Audio is thrown away</dt>
+              <dd>Speech becomes text on the device and the sound is discarded. Only the words go to the model.</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <!-- 02 SPEAK ---------------------------------------------------------- -->
+      <section class="scene" id="speak" data-state="speaking" data-label="Speaking" aria-labelledby="speak-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>02</b> Speak</p>
+          <h2 id="speak-title">Answers start before the thought is finished.</h2>
+          <p class="body">
+            Each sentence is spoken the moment it is complete, by a voice that runs on your Mac. The voice is verified on every
+            start. If a file changes, <span data-name>Markon</span> refuses to speak rather than sound like someone
+            else. There is no fallback voice.
+          </p>
+          <p class="meta"><b data-count="179">179</b> ms to the first word · spoken on your Mac</p>
+        </div>
+        <div class="col-r" data-reveal>
+          <figure class="barge card">
+            <figcaption class="card-head"><span>Speaking</span><span class="barge-state" id="barge-state">live</span></figcaption>
+            <p class="barge-text" id="barge-text"></p>
+            <button class="btn btn--line" id="barge" type="button">Talk over it</button>
+            <p class="card-foot">Interrupt at any word. Playback stops within one audio buffer and the rest is dropped.</p>
+          </figure>
+        </div>
+      </section>
+
+      <!-- 03 SHOW ----------------------------------------------------------- -->
+      <section class="scene" id="show" data-state="thinking" data-label="Working" aria-labelledby="show-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>03</b> Show</p>
+          <h2 id="show-title">The core never moves. The work comes to it.</h2>
+          <p class="body">
+            Every step lands on the canvas as a card: agents and their progress, the files it opened, the pages it read,
+            what it is doing in another app, and the result. Cards are plain text you can select, scroll and bring back
+            from History.
+          </p>
+          <ul class="kinds" aria-label="Card kinds">
+            <li>Agent</li><li>File</li><li>Page</li><li>App</li><li>Result</li><li>Note</li><li>Source</li><li>Media</li>
+          </ul>
+        </div>
+        <div class="col-r cards">
+          <article class="card c-agent" data-reveal>
+            <header class="card-head"><span>Agent</span><span>00:42</span></header>
+            <h3>Comparing three Lisbon flights</h3>
+            <div class="steps" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <p class="card-foot">7 of 12 rounds · 4 pages read</p>
+          </article>
+          <article class="card c-page" data-reveal>
+            <header class="card-head"><span>Page</span><span>tap.pt</span></header>
+            <svg viewBox="0 0 200 60" class="sketch" aria-hidden="true">
+              <rect x="0" y="0" width="200" height="8" rx="1" />
+              <rect x="0" y="16" width="140" height="5" rx="1" />
+              <rect x="0" y="26" width="168" height="5" rx="1" />
+              <rect x="0" y="36" width="110" height="5" rx="1" />
+              <rect x="0" y="50" width="56" height="10" rx="1" class="hot" />
+            </svg>
+          </article>
+          <article class="card c-result" data-reveal>
+            <header class="card-head"><span>Result</span><span>3 sources</span></header>
+            <p class="big">€214</p>
+            <p class="card-foot">Fri 07:10 direct · cheapest that lands before noon</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- 04 ACT ------------------------------------------------------------ -->
+      <section class="scene" id="act" data-state="thinking" data-label="Asking" aria-labelledby="act-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>04</b> Act</p>
+          <h2 id="act-title">It does the thing. You say yes first.</h2>
+          <p class="body">
+            <span data-name>Markon</span> can run your Shortcuts, set volume and Wi-Fi, lay out windows, drive Chrome in
+            its own profile, and work any app through Accessibility. Anything that changes something stops on a card
+            with the exact text, and waits for your word.
+          </p>
+          <ol class="tiers" aria-label="Permission tiers">
+            <li><b>Read</b><span>Allowed in folders you approved</span></li>
+            <li><b>Write</b><span>Asks once per folder</span></li>
+            <li><b>Execute</b><span>Asks every time, shows the exact command</span></li>
+          </ol>
+        </div>
+        <div class="col-r" data-reveal>
+          <article class="card approve" id="approve" data-phase="ask">
+            <header class="card-head"><span>Send · Messages</span><span>needs you</span></header>
+            <p class="approve-to">To Sara</p>
+            <p class="approve-msg">“Running ten minutes late. Start without me.”</p>
+            <div class="approve-actions">
+              <button class="btn btn--solid" type="button" data-answer="yes">Yes, send it</button>
+              <button class="btn btn--line" type="button" data-answer="no">No</button>
+            </div>
+            <p class="approve-out" role="status" aria-live="polite"></p>
+            <p class="card-foot">No “always yes” here: this reply was drafted after reading outside text.</p>
+          </article>
+          <p class="said said--small">“What did you just do?”</p>
+          <p class="body body--small">Every change goes in an activity log. Ask, and it lists each one and whether it can be undone: file writes and window moves go back.</p>
+        </div>
+      </section>
+
+      <!-- 05 KNOW ----------------------------------------------------------- -->
+      <section class="scene" id="know" data-state="listening" data-label="Gathering" aria-labelledby="know-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>05</b> Know</p>
+          <h2 id="know-title">One question across everything you use.</h2>
+          <p class="said said--small">“What did I miss?”</p>
+          <p class="body">
+            Messages, mail, calendar, notes, Slack, GitHub and the rest answer together, one card per source. Your
+            folders and PDFs are searched by meaning, not just keywords. Every source starts switched off.
+          </p>
+        </div>
+        <div class="col-r" data-reveal>
+          <ul class="sources" id="sources" aria-label="Sources">
+            <li data-src="0">Messages</li><li data-src="1">Mail</li><li data-src="2">Calendar</li>
+            <li data-src="3">Notes</li><li data-src="4">Contacts</li><li data-src="5">Slack</li>
+            <li data-src="6">GitHub</li><li data-src="7">Notion</li><li data-src="8">Telegram</li>
+            <li data-src="9">Folders</li>
+          </ul>
+          <p class="body body--small">
+            Private by route: messages and mail can be summarised by a model running on your Mac, so their text never
+            reaches the cloud, while everything else uses Claude.
+          </p>
+        </div>
+      </section>
+
+      <!-- 06 ROUTINE -------------------------------------------------------- -->
+      <section class="scene" id="routine" data-state="idle" data-label="Scheduled" aria-labelledby="routine-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>06</b> Routine</p>
+          <h2 id="routine-title">New habits are a file, not an update.</h2>
+          <p class="body">
+            Drop an agent file in a folder and it runs on its schedule, with only the tools it lists. Edit it and the
+            next tick reads the change. The briefing you can talk back to: “more on that”, “skip”, “remind me about this
+            at three”.
+          </p>
+          <ul class="agenda" aria-label="Bundled agents">
+            <li><time>07:30</time>Morning briefing</li>
+            <li><time>−10 min</time>Meeting prep, for events with people</li>
+            <li><time>on change</time>Watch rules, each item spoken once</li>
+            <li><time>any time</time>“Learn this”, saved only on yes</li>
+          </ul>
+        </div>
+        <div class="col-r" data-reveal>
+          <figure class="card file">
+            <figcaption class="card-head"><span>~/.markon/agents/morning-briefing.toml</span><span>next 07:30</span></figcaption>
+            <pre><code><i>name</i> = <s>"Morning briefing"</s>
+<i>schedule</i> = <s>"30 7 * * *"</s>
+<i>tools</i> = [<s>"what_did_i_miss"</s>, <s>"fetch_page"</s>,
+         <s>"remind_me"</s>]
+<i>max_rounds</i> = <b>6</b>
+<i>prompt</i> = <s>"""
+Give me my morning briefing out loud,
+in under a minute of speech.
+Only facts from the data you gathered.
+Never invent an item, a person or a time.
+"""</s></code></pre>
+          </figure>
+        </div>
+      </section>
+
+      <!-- 07 BRAIN ---------------------------------------------------------- -->
+      <section class="scene" id="brain" data-state="thinking" data-label="Routing" aria-labelledby="brain-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>07</b> Brain</p>
+          <h2 id="brain-title">Bring your own brain. Switch it mid-conversation.</h2>
+          <fieldset class="routes" id="routes">
+            <legend class="sr">Model route</legend>
+            <label><input type="radio" name="route" value="cc" checked /><span>Claude Code</span></label>
+            <label><input type="radio" name="route" value="anthropic" /><span>Anthropic key</span></label>
+            <label><input type="radio" name="route" value="openrouter" /><span>OpenRouter</span></label>
+            <label><input type="radio" name="route" value="local" /><span>Ollama · LM Studio</span></label>
+            <label><input type="radio" name="route" value="builtin" /><span>Built-in</span></label>
+          </fieldset>
+        </div>
+        <div class="col-r" data-reveal>
+          <figure class="card route">
+            <figcaption class="card-head"><span id="route-name">Claude Code</span><span id="route-tag">no key</span></figcaption>
+            <svg class="route-map" viewBox="0 0 320 120" aria-hidden="true">
+              <rect x="6" y="38" width="88" height="44" rx="3" class="node" />
+              <text x="50" y="64">your Mac</text>
+              <path class="wire" id="route-wire" d="M94 60 H226" />
+              <circle class="packet" r="3" cy="60" cx="94" />
+              <rect x="226" y="38" width="88" height="44" rx="3" class="node node--far" id="route-far" />
+              <text x="270" y="64" id="route-dest">Anthropic</text>
+            </svg>
+            <p class="route-copy" id="route-copy"></p>
+          </figure>
+          <p class="meta">Takes effect on the next turn. No restart.</p>
+        </div>
+      </section>
+
+      <!-- 08 MODES ---------------------------------------------------------- -->
+      <section class="scene" id="modes" data-state="speaking" data-label="Switching" aria-labelledby="modes-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>08</b> Modes</p>
+          <h2 id="modes-title">One sentence, and it changes modes.</h2>
+          <p class="said said--small">“Activate Eclipse.”</p>
+          <p class="body">
+            <span data-name>Markon</span> has modes. Each one changes how it looks and unlocks a different set of
+            capabilities. Say “normal mode” to come back.
+          </p>
+        </div>
+        <div class="col-r" data-reveal>
+          <fieldset class="modes">
+            <legend class="eyebrow">Try it. The whole page follows.</legend>
+            <label
+              ><input type="radio" name="mode" value="normal" checked /><i class="swatch" aria-hidden="true"></i
+              ><span>Normal</span><small>“Normal mode”</small></label
+            >
+            <label
+              ><input type="radio" name="mode" value="eclipse" /><i class="swatch swatch--eclipse" aria-hidden="true"></i
+              ><span>Eclipse</span><small>“Activate Eclipse”</small></label
+            >
+          </fieldset>
+          <p class="meta">Switched by voice. No menu, no restart.</p>
+        </div>
+      </section>
+
+      <!-- 09 PRIVATE -------------------------------------------------------- -->
+      <section class="scene" id="private" data-state="idle" data-label="Standby" aria-labelledby="private-title">
+        <div class="col-l" data-reveal>
+          <p class="index"><b>09</b> Private</p>
+          <h2 id="private-title">You can always see what it did.</h2>
+          <ul class="ledger" aria-label="Stays on your Mac">
+            <li>Your voice, discarded after transcription</li>
+            <li>Keys, in the macOS keychain only</li>
+            <li>Memory: only what you said to remember</li>
+            <li>Passwords and card numbers, never typed</li>
+          </ul>
+        </div>
+        <div class="col-r" data-reveal>
+          <ul class="ledger ledger--out" aria-label="Leaves only when you choose">
+            <li>The words of a turn, to the model you picked</li>
+            <li>Tool results, scrubbed of keys and tokens</li>
+            <li>Files, only when a tool reads one, named on its card</li>
+            <li>Crash reports, only if you opt in</li>
+          </ul>
+          <p class="said said--small">“Forget that.”</p>
+          <p class="body body--small">Deletes the fact and anything built only from it. One button wipes everything, keychain included.</p>
+        </div>
+      </section>
+
+      <!-- NUMBERS ----------------------------------------------------------- -->
+      <section class="scene numbers" data-state="speaking" data-label="Measured" aria-label="Measured on an M1 Pro">
+        <dl class="col-l stats" data-reveal>
+          <div><dt>to the final transcript</dt><dd><b data-count="350">350</b><small>ms</small></dd></div>
+          <div><dt>to the first spoken word</dt><dd><b data-count="179">179</b><small>ms</small></dd></div>
+        </dl>
+        <dl class="col-r stats" data-reveal>
+          <div><dt>to draw a frame of the core</dt><dd><b data-count="2.6" data-dec="1">2.6</b><small>ms</small></dd></div>
+          <div><dt>of your audio uploaded</dt><dd><b>0</b><small>bytes</small></dd></div>
+        </dl>
+        <p class="numbers-note meta">Measured on an M1 Pro. Each number is a test or a measurement, not a target.</p>
+      </section>
+
+      <!-- GET --------------------------------------------------------------- -->
+      <section class="scene get" id="get" data-state="speaking" data-label="Hello" aria-labelledby="get-title">
+        <h2 id="get-title" class="hero-title">
+          <span class="hero-l"><span class="line"><span>Say</span></span></span>
+          <span class="hero-r"><span class="line"><span>hello.</span></span></span>
+        </h2>
+        <div class="get-foot" data-reveal>
+          <!-- Becomes a download link once the signed build is published. -->
+          <button class="btn btn--solid btn--big" type="button" disabled>Coming soon</button>
+          <p class="meta">macOS 13+ · Apple Silicon first · Windows release to follow</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="hud">
+      <span class="hud-state"><i></i><span id="hud-label">Standby</span></span>
+      <span class="hud-scene" id="hud-scene">00 · Top</span>
+      <span class="hud-credits" id="hud-mode">Mode · Normal</span>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "@markon/site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5180",
+    "build": "vite build",
+    "preview": "vite preview --port 5180",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "5.3.0",
+    "@fontsource/instrument-serif": "5.3.0",
+    "@fontsource/jetbrains-mono": "5.3.0",
+    "@markon/voice-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "vite": "8.3.7",
+    "vitest": "5.1.0"
+  }
+}
