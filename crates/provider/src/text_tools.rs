@@ -55,15 +55,25 @@ pub fn parse_calls(out: &str) -> (String, Vec<(String, Value)>) {
             if let Some(call) = parse_invoke(body) {
                 calls.push(call);
             }
-        } else if let Ok(v) = serde_json::from_str::<Value>(body.trim())
-            && let Some(name) = v["name"].as_str()
-        {
-            let args = match &v["arguments"] {
-                Value::String(s) => serde_json::from_str(s).unwrap_or(json!({})),
-                Value::Null => json!({}),
-                a => a.clone(),
-            };
-            calls.push((name.to_string(), args));
+        } else {
+            // Every JSON object in the tag, up to anything that is not one (a stray brace).
+            let found = calls.len();
+            for v in serde_json::Deserializer::from_str(body).into_iter::<Value>() {
+                let Ok(v) = v else { break };
+                let Some(name) = v["name"].as_str() else {
+                    continue;
+                };
+                let args = match (&v["arguments"], &v["parameters"]) {
+                    (Value::String(s), _) => serde_json::from_str(s).unwrap_or(json!({})),
+                    (Value::Null, Value::Null) => json!({}),
+                    (Value::Null, p) => p.clone(),
+                    (a, _) => a.clone(),
+                };
+                calls.push((name.to_string(), args));
+            }
+            if calls.len() == found {
+                eprintln!("[tools] unreadable tool call: {}", body.trim());
+            }
         }
         rest = after.get(end + close.len()..).unwrap_or("");
     }
@@ -139,5 +149,32 @@ mod tests {
         assert_eq!(speakable("Checking. <invoke name="), 10);
         assert_eq!(speakable("Checking. <function_calls>"), 10);
         assert_eq!(speakable("1 < 2"), 5);
+    }
+
+    /// Seen on the Claude Code route: a call that did not parse ended the turn with nothing said.
+    #[test]
+    fn loosely_written_tool_calls_still_run() {
+        let url = || json!({"url": "https://x"});
+        // Two calls in one tag.
+        let (text, calls) = parse_calls(
+            "<tool_call>\n{\"name\": \"fetch_page\", \"arguments\": {\"url\": \"https://x\"}}\n\
+             {\"name\": \"what_did_i_miss\", \"arguments\": {}}\n</tool_call>",
+        );
+        assert_eq!(text, "");
+        assert_eq!(
+            calls,
+            [
+                ("fetch_page".to_string(), url()),
+                ("what_did_i_miss".to_string(), json!({}))
+            ]
+        );
+        // A stray closing brace, and `parameters` for `arguments`.
+        for body in [
+            "{\"name\": \"fetch_page\", \"arguments\": {\"url\": \"https://x\"}}}",
+            "{\"name\": \"fetch_page\", \"parameters\": {\"url\": \"https://x\"}}",
+        ] {
+            let (_, calls) = parse_calls(&format!("<tool_call>{body}</tool_call>"));
+            assert_eq!(calls, [("fetch_page".to_string(), url())], "{body}");
+        }
     }
 }
