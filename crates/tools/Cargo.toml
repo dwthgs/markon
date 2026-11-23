@@ -15,7 +15,7 @@ markon-provider = { path = "../provider" }
 rmcp = { workspace = true, default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth"] }
 async-trait = "=0.1.92"
 reqwest.workspace = true
-url = "=2.5.8"
+url = "=2.5.9"
 serde.workspace = true
 sha2 = "=0.10.9"
 pdf-extract = "=0.12.1"

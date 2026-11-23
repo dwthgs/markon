@@ -2,7 +2,7 @@
 use markon_agent::{AgentEvent, BoxFuture};
 use markon_tools::cards::{Card, CardKind, CardStatus, now_ms};
 use markon_tools::mcp::{McpFile, McpServer};
-use markon_tools::permissions::{Decision, Permissions, Prompter, Request};
+use markon_tools::permissions::{Decision, Permissions, Prompter, Request, Tier};
 use markon_tools::{Runtime, Shared};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -16,6 +16,8 @@ use tokio::sync::oneshot;
 pub const EV_CARD: &str = "markon://card";
 pub const EV_PERMISSION: &str = "markon://permission";
 pub const EV_CARDS_LOAD: &str = "markon://cards-load";
+/// Card ids the screen should drop (failed steps of a turn that finished anyway).
+pub const EV_CARDS_REMOVE: &str = "markon://cards-remove";
 /// A question was answered by voice: the HUD closes its dialog.
 pub const EV_PERMISSION_DONE: &str = "markon://permission-answered";
 /// An unanswered prompt is a "no".
@@ -24,7 +26,7 @@ const ASK_TIMEOUT: Duration = Duration::from_secs(120);
 pub struct HudPrompter {
     app: AppHandle,
     next: AtomicU64,
-    pending: Mutex<HashMap<u64, oneshot::Sender<Decision>>>,
+    pending: Mutex<HashMap<u64, (Tier, oneshot::Sender<Decision>)>>,
 }
 
 impl HudPrompter {
@@ -37,23 +39,27 @@ impl HudPrompter {
     }
 
     pub fn answer(&self, id: u64, d: Decision) {
-        if let Some(tx) = self.pending.lock().expect("pending").remove(&id) {
+        if let Some((_, tx)) = self.pending.lock().expect("pending").remove(&id) {
             let _ = tx.send(d);
         }
     }
 
-    /// Answer every open question by voice, oldest first is the one on screen.
+    /// Answer the question on screen (the oldest) by voice. A spoken yes only counts for a
+    /// send; commands and writes stay open until clicked. False: nothing was answered.
     pub fn answer_spoken(&self, d: Decision) -> bool {
-        let ids: Vec<u64> = self
+        let first = self
             .pending
             .lock()
             .expect("pending")
-            .keys()
-            .copied()
-            .collect();
-        let Some(first) = ids.iter().min().copied() else {
+            .iter()
+            .min_by_key(|(id, _)| **id)
+            .map(|(id, (tier, _))| (*id, *tier));
+        let Some((first, tier)) = first else {
             return false;
         };
+        if !voice_may_answer(tier, d) {
+            return false;
+        }
         self.answer(first, d);
         let _ = self.app.emit(EV_PERMISSION_DONE, first);
         true
@@ -68,7 +74,10 @@ impl Prompter for HudPrompter {
     fn ask(&self, req: Request) -> BoxFuture<'static, Decision> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().expect("pending").insert(id, tx);
+        self.pending
+            .lock()
+            .expect("pending")
+            .insert(id, (req.tier, tx));
         crate::show_window(&self.app);
         let _ = self.app.emit(
             EV_PERMISSION,
@@ -84,7 +93,15 @@ impl Prompter for HudPrompter {
     }
 }
 
+/// The microphone hears the room, the TV and Markon's own echo, and "ok" is a common word: a spoken
+/// yes may send a message the user just dictated, never run a command or open a folder for writing.
+/// A spoken no is always safe.
+fn voice_may_answer(tier: Tier, d: Decision) -> bool {
+    d == Decision::Deny || tier == Tier::Send
+}
+
 /// What a spoken reply to an open question means. None: it is not an answer.
+/// A yes must be the whole utterance ("ok wait, what is that" is not one); a no may start a sentence.
 pub fn spoken_answer(text: &str) -> Option<Decision> {
     let t: String = text
         .to_lowercase()
@@ -92,7 +109,10 @@ pub fn spoken_answer(text: &str) -> Option<Decision> {
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
         .collect();
     let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
-    if t.starts_with("always") || t.starts_with("yes always") {
+    if ["always", "always yes", "yes always"].contains(&t.as_str())
+        || t.starts_with("always yes for ")
+        || t.starts_with("yes always for ")
+    {
         return Some(Decision::Always);
     }
     let yes = [
@@ -124,11 +144,7 @@ pub fn spoken_answer(text: &str) -> Option<Decision> {
         "no thanks",
         "not now",
     ];
-    if yes
-        .iter()
-        .any(|y| t == *y || t.starts_with(&format!("{y} ")))
-        && !t.contains("not")
-    {
+    if yes.contains(&t.as_str()) {
         return Some(Decision::Allow);
     }
     no.iter()
@@ -359,9 +375,23 @@ mod tests {
             ("No, don't.", Some(Decision::Deny)),
             ("do not send that", Some(Decision::Deny)),
             ("yes, but do not send it yet", None),
+            ("ok wait, what is that", None),
+            ("sure thing, play some music", None),
+            ("always wondered about that", None),
             ("what's the weather", None),
         ] {
             assert_eq!(spoken_answer(t), d, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_spoken_yes_only_answers_a_send() {
+        assert!(voice_may_answer(Tier::Send, Decision::Allow));
+        assert!(voice_may_answer(Tier::Send, Decision::Always));
+        for tier in [Tier::Execute, Tier::Write] {
+            assert!(!voice_may_answer(tier, Decision::Allow));
+            assert!(!voice_may_answer(tier, Decision::Always));
+            assert!(voice_may_answer(tier, Decision::Deny));
         }
     }
 

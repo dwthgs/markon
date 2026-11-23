@@ -223,6 +223,22 @@ async fn a_page_that_never_loads_times_out() {
     assert!(t.elapsed() < Duration::from_secs(2));
 }
 
+/// A failed fetch says why, not only reqwest's "error sending request".
+#[tokio::test]
+async fn a_failed_fetch_names_its_cause() {
+    let mut s = setup("cause", vec![]);
+    s.rt.allow_private_hosts = true;
+    let addr = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let err =
+        s.rt.fetch_with_timeout(&format!("http://{addr}/"), Duration::from_secs(5))
+            .await
+            .unwrap_err();
+    assert!(err.to_lowercase().contains("refused"), "{err}");
+}
+
 #[tokio::test]
 async fn pages_on_this_mac_or_its_network_are_refused() {
     let s = setup("ssrf", vec![]);
@@ -358,6 +374,26 @@ async fn mcp_tools_are_discovered_and_called() {
     assert_eq!(specs[0].name, "demo__echo");
     let out = srv.call("echo", json!({"text": "hi"})).await.unwrap();
     assert!(out.contains("echo: hi"), "{out}");
+}
+
+#[tokio::test]
+async fn an_mcp_tool_asks_every_time_and_a_no_calls_nothing() {
+    // Answers pop from the end: no first, then yes.
+    let s = setup("mcp-asks", vec![Decision::Allow, Decision::Deny]);
+    let (conn, _) = echo_connector(usize::MAX);
+    let srv = Arc::new(McpServer::new("demo", conn));
+    srv.connect().await.unwrap();
+    s.rt.set_mcp(vec![srv]);
+
+    let no = s.rt.call(call("demo__echo", json!({"text": "hi"}))).await;
+    assert!(no.is_err(), "{no:?}");
+    let yes = s.rt.call(call("demo__echo", json!({"text": "there"}))).await;
+    assert!(yes.unwrap().contains("echo: there"));
+
+    let asked = s.asker.asked.lock().unwrap();
+    assert_eq!(asked.len(), 2);
+    assert_eq!(asked[0].tier, Tier::Execute);
+    assert!(asked[0].detail.contains("demo") && asked[0].detail.contains("hi"));
 }
 
 #[tokio::test]

@@ -96,6 +96,23 @@ impl Resolve for PublicOnly {
     }
 }
 
+/// reqwest's own text is only "error sending request": add the innermost cause ("dns error: ...",
+/// "tcp connect error: Connection refused"). `e` must already be `without_url`.
+pub fn cause(e: reqwest::Error) -> String {
+    let mut inner: &dyn std::error::Error = &e;
+    while let Some(next) = inner.source() {
+        inner = next;
+    }
+    let top = e.to_string();
+    if e.is_timeout() {
+        "the site did not answer in time".into()
+    } else if std::ptr::addr_eq(inner, &e) {
+        top
+    } else {
+        format!("{top}: {inner}")
+    }
+}
+
 pub fn redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         if attempt.previous().len() >= 5 {

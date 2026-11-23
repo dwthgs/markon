@@ -158,7 +158,7 @@ impl Runtime {
                 .get(url)
                 .send()
                 .await
-                .map_err(|e| e.without_url().to_string())?;
+                .map_err(|e| guard::cause(e.without_url()))?;
             let status = r.status();
             let body = r.text().await.map_err(|e| e.to_string())?;
             if !status.is_success() {
@@ -504,6 +504,12 @@ impl Runtime {
             .find(|s| s.name == server)
             .cloned()
             .ok_or((false, format!("no MCP server {server}")))?;
+        // An MCP tool can do whatever its server can (post, edit, delete), so it asks every time like
+        // a command. The server's own "read-only" hints are not trusted.
+        self.perms
+            .execute(&c.name, &format!("{server} · {tool}\n{}", c.input))
+            .await
+            .map_err(|e| (true, e))?;
         let out = srv
             .call(tool, c.input.clone())
             .await
