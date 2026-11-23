@@ -7,10 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+/// Set by the "mark" tool when it runs to the end.
+static MARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 struct Tools;
 impl ToolRuntime for Tools {
     fn specs(&self) -> Vec<ToolSpec> {
-        ["slow", "fast", "boom", "big", "hang"]
+        ["slow", "fast", "boom", "big", "hang", "mark"]
             .iter()
             .map(|n| ToolSpec {
                 name: (*n).into(),
@@ -27,6 +30,11 @@ impl ToolRuntime for Tools {
                     Ok("slow done".into())
                 }
                 "fast" => Ok("fast done".into()),
+                "mark" => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    MARKED.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok("marked".into())
+                }
                 "big" => Ok("x".repeat(100_000)),
                 "hang" => {
                     tokio::time::sleep(Duration::from_secs(3600)).await;
@@ -264,6 +272,27 @@ async fn a_dropped_stream_keeps_the_partial_answer_and_marks_it() {
     let t = finished(&ev);
     assert_eq!(t.text, "The answer is ");
     assert!(t.partial);
+}
+
+#[tokio::test]
+async fn cancelling_a_turn_stops_its_running_tools() {
+    let fake = Arc::new(FakeProvider::new(vec![FakeProvider::tools(&[(
+        "t1",
+        "mark",
+        json!({}),
+    )])]));
+    let (a, _rx) = Agent::new(fake, Arc::new(Tools), AgentConfig::default());
+    let a = Arc::new(a);
+    let a2 = a.clone();
+    let h = tokio::spawn(async move { a2.submit(UserTurn::text("go")).await });
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    a.cancel();
+    h.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !MARKED.load(std::sync::atomic::Ordering::SeqCst),
+        "the tool ran on after the turn was cancelled"
+    );
 }
 
 #[tokio::test]

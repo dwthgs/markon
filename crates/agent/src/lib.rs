@@ -329,6 +329,15 @@ fn cut_point(msgs: &[Message], keep: usize) -> Option<usize> {
     })
 }
 
+/// A spawned tool call that stops when its turn does: a cancelled turn drops `run_tools`, and a bare
+/// `JoinHandle` would leave the tool running ("stop" during a delete would not stop the delete).
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Prepended to the next turn after the user talked over a reply.
 pub const SPEECH_INTERRUPTED_NOTE: &str =
     "[Note: the user interrupted your previous spoken reply before it finished.]";
@@ -993,15 +1002,15 @@ impl Agent {
                     );
                     Box::pin(async move { Err(msg) })
                 };
-            handles.push((c, Instant::now(), tokio::spawn(fut)));
+            handles.push((c, Instant::now(), AbortOnDrop(tokio::spawn(fut))));
         }
         let mut out = Vec::new();
         let mut images = Vec::new();
         for (c, t0, mut h) in handles {
-            let r = match tokio::time::timeout_at(deadline, &mut h).await {
+            let r = match tokio::time::timeout_at(deadline, &mut h.0).await {
                 Ok(r) => r.unwrap_or_else(|e| Err(format!("tool crashed: {e}"))),
                 Err(_) => {
-                    h.abort();
+                    h.0.abort();
                     Err(format!(
                         "{} took too long (over {} s), so it was stopped",
                         c.name,
