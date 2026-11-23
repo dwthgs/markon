@@ -17,7 +17,7 @@ pub struct Whisper {
 const PROMPT: &str = "Markon, Markan.";
 
 impl Whisper {
-    /// `hint` is extra vocabulary to bias toward, such as spoken command phrases ("hacker mode").
+    /// `hint` is extra vocabulary to bias toward, such as spoken command phrases ("activate Eclipse").
     pub fn load(path: &Path, hint: &str) -> Result<Self, AudioError> {
         let ctx = WhisperContext::new_with_params(path, WhisperContextParameters::default())
             .map_err(|e| AudioError::Model(format!("whisper: {e}")))?;

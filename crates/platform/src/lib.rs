@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 pub mod control;
 pub mod fake;
+#[cfg(target_os = "macos")]
+pub mod voice_mic;
 pub use control::{AppCommand, AxCommand, Frame, Keys, Permission, ShortcutCommand, SystemCommand};
 
 /// Keychain service name for every Markon secret.
@@ -115,8 +117,27 @@ pub fn spotify_script(cmd: SpotifyCommand<'_>) -> Option<String> {
         SpotifyCommand::PlayUri(u) if plain_uri(u) => format!("play track \"{u}\"\n"),
         SpotifyCommand::PlayUri(_) => return None,
     };
+    // Spotify raises its window to show what it plays, over Markon: hide it again unless the user
+    // was already in it. Hiding needs System Events access; without it Spotify just stays in front.
+    let action = if action.is_empty() {
+        action
+    } else {
+        format!(
+            "set wasFront to false\n\
+             try\n\
+             tell application \"System Events\" to set wasFront to frontmost of process \"Spotify\"\n\
+             end try\n\
+             tell application \"Spotify\" to {action}\
+             if not wasFront then\n\
+             try\n\
+             delay 0.5\n\
+             tell application \"System Events\" to if frontmost of process \"Spotify\" then set visible of process \"Spotify\" to false\n\
+             end try\n\
+             end if\n"
+        )
+    };
     Some(format!(
-        "tell application \"Spotify\"\n{action}\
+        "{action}tell application \"Spotify\"\n\
          if player state is stopped then return \"\" & linefeed & \"\" & linefeed & \"\" & linefeed & \"\" & linefeed & \"stopped\" & linefeed & \"0\" & linefeed & \"0\"\n\
          set t to current track\n\
          return (name of t) & linefeed & (artist of t) & linefeed & (album of t) & linefeed & (artwork url of t) & linefeed & (player state as string) & linefeed & (player position as string) & linefeed & ((duration of t) / 1000 as string)\n\
@@ -433,6 +454,14 @@ impl Platform for MacOs {
         }
         let script = spotify_script(cmd)
             .ok_or_else(|| PlatformError::Refused("not a Spotify link".into()))?;
+        // Started by AppleScript, Spotify opens in front of Markon: start it hidden and unfocused.
+        let running = std::process::Command::new("/usr/bin/pgrep")
+            .args(["-xq", "Spotify"])
+            .status()
+            .is_ok_and(|s| s.success());
+        if !running {
+            run_open(&["-g", "-j", "-a", "Spotify"])?;
+        }
         let out = std::process::Command::new("/usr/bin/osascript")
             .args(["-e", &script])
             .output()
@@ -527,15 +556,13 @@ mod tests {
             )),
             None
         );
-        assert!(
-            !spotify_script(SpotifyCommand::Status)
-                .unwrap()
-                .contains("play track")
-        );
+        let status = spotify_script(SpotifyCommand::Status).unwrap();
+        assert!(!status.contains("play track") && !status.contains("set visible"));
+        assert!(s.contains("set visible of process \"Spotify\" to false"));
         assert!(
             spotify_script(SpotifyCommand::Pause)
                 .unwrap()
-                .contains("\npause\n")
+                .contains("to pause\n")
         );
     }
 

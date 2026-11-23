@@ -1,4 +1,4 @@
-//! "Hey Markon" / "Hey Markan" / "Hey Mark" without a dedicated wake-word model: an energy detector cuts
+//! "Hey Markon" / "Hey Markan" / "Hey Mark" / "Mark" without a dedicated wake-word model: an energy detector cuts
 //! short bursts of speech from an always-open microphone, whisper transcribes each burst on device, and
 //! the text is matched against the wake phrase. Audio is never stored or sent anywhere.
 use crate::barge::{self, Detector, Silero, VadState};
@@ -56,52 +56,71 @@ pub fn is_words(text: &str) -> bool {
     t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !FILLERS.contains(&t.as_str())
 }
 
-/// Jarvis `CANCEL_WORDS`: said on their own, always the user.
-const CANCEL_WORDS: &[&str] = &["wait", "no", "stop", "cancel", "hold on"];
+/// Words a person uses to cut in. Said on their own they are the user, even when Markon's reply
+/// contains them ("No, the meeting moved" must not swallow a "No!").
+const INTERRUPTIONS: &[&str] = &[
+    "stop",
+    "wait",
+    "no",
+    "cancel",
+    "hold on",
+    "enough",
+    "quiet",
+    "never mind",
+];
 
-fn tokens(text: &str) -> Vec<String> {
+fn words(text: &str) -> Vec<String> {
     text.to_lowercase()
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '\''))
-        .filter(|t| !t.is_empty())
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|w| !w.is_empty())
         .map(String::from)
         .collect()
 }
 
-/// Jarvis `_is_stem_echo`: every word is a clipped form of one Markon said ("files" heard as
-/// "file", "stopped" as "stop"). Four letters at least, and the two differ by at most four.
-fn is_stem_echo(heard: &[String], said: &[String]) -> bool {
-    heard.iter().all(|t| {
-        said.iter().any(|r| {
-            t.len() >= 4
-                && r.len().abs_diff(t.len()) <= 4
-                && (r.starts_with(t.as_str()) || t.starts_with(r.as_str()))
-        })
-    })
+/// How alike two words are, from 0 to 1: one minus the edit distance over the longer length.
+/// Catches what speech recognition does to a word ("Sarah" for "Sara", "report" for "reports").
+fn likeness(a: &str, b: &str) -> f32 {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (row[j + 1] + 1)
+                .min(row[j] + 1)
+                .min(prev + usize::from(ca != cb));
+            prev = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    1.0 - row[b.len()] as f32 / a.len().max(b.len()).max(1) as f32
 }
 
-/// Markon hearing its own voice in what the microphone caught after a barge-in (Jarvis
-/// `SpeechScheduler.classify`): no words at all, or 70% or more of the words are ones Markon was
-/// saying with fewer than two new ones. A cancel word on its own is always the user. A single
-/// other word that is only a clipped form of one of Markon's counts as its own (ASR drops endings).
+/// Markon hearing its own voice in what the microphone caught after a barge-in. Echo comes back in
+/// order, as a stretch of the reply, so a transcript is Markon's own when its words line up with
+/// one continuous run of what Markon was saying. Short runs must match closely, longer runs carry
+/// more evidence and may match loosely (one word heard as "leafs" for "leaves"). Changed words break
+/// the run, so a correction ("leaves on Friday at ten" over "at nine") is the user.
 pub fn is_own_words(heard: &str, said: &str) -> bool {
-    let toks = tokens(heard);
-    if toks.is_empty() {
+    let heard = words(heard);
+    if heard.is_empty() {
         return true;
     }
-    if CANCEL_WORDS.contains(&toks.join(" ").as_str()) {
+    if INTERRUPTIONS.contains(&heard.join(" ").as_str()) {
         return false;
     }
-    let said = tokens(said);
-    if said.is_empty() {
-        return false;
-    }
-    let matching = toks.iter().filter(|t| said.contains(t)).count();
-    (matching * 10 >= toks.len() * 7 && toks.len() - matching < 2)
-        || (toks.len() == 1 && is_stem_echo(&toks, &said))
+    let said = words(said);
+    let close = if heard.len() >= 4 { 0.6 } else { 0.8 };
+    said.windows(heard.len())
+        .any(|run| run.iter().zip(&heard).all(|(s, h)| likeness(s, h) >= close))
 }
 
 /// Microphone audio (rate, mono samples) said over Markon, waiting for the listening session.
 pub type Handoff = Arc<Mutex<(u32, Vec<f32>)>>;
+
+/// The wake listener's echo-cancelled microphone, lent to a listening session: its rate (0 when
+/// Apple's unit is not open) and, while a session records, where to send the samples.
+pub type Tap = Arc<Mutex<(u32, Option<std::sync::mpsc::Sender<Vec<f32>>>)>>;
 
 /// A wake phrase is short: end the burst after this much silence (a request uses the longer pause).
 /// 400 ms, down from 600: the answer to "Hi Mark" came too late. A comma pause in "Hey Markon, play
@@ -147,6 +166,12 @@ pub fn match_wake(text: &str) -> Option<String> {
             } else {
                 1
             }
+        } else if start == 0
+            && first == "mark"
+            && (raw.len() == 1 || raw[0].ends_with([',', '.', '!', '?']))
+        {
+            // "Mark" alone or set off by a pause ("Mark, what's the time?"), not "Mark said".
+            1
         } else {
             continue;
         };
@@ -268,6 +293,7 @@ pub(crate) fn wake_thread(
     attentive: Arc<AtomicBool>,
     play: Arc<Playback>,
     handoff: Handoff,
+    tap: Tap,
     sink: EventSink,
     vad: Option<PathBuf>,
     transcribe: impl Fn(&[f32]) -> Option<String>,
@@ -282,26 +308,55 @@ pub(crate) fn wake_thread(
     let channels = cfg.channels() as usize;
     let rate = cfg.sample_rate();
     let shared = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let s = shared.clone();
-    let stream = dev.build_input_stream(
-        cfg.into(),
-        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+    // Apple's echo canceller first: AEC3 left Markon's voice at the user's own level
+    // once the Mac's volume was turned up. AEC3 on the plain microphone is the fallback.
+    #[cfg(target_os = "macos")]
+    let voice = {
+        let s = shared.clone();
+        markon_platform::voice_mic::open(rate, move |pcm| {
             if let Ok(mut b) = s.try_lock() {
-                b.extend(downmix(data, channels));
+                b.extend_from_slice(pcm);
             }
-        },
-        |e| eprintln!("[wake] input stream error: {e}"),
-        None,
-    );
-    let Ok(stream) = stream else {
-        eprintln!("[wake] cannot open the microphone");
-        return;
+        })
+        .inspect_err(|e| eprintln!("[wake] Apple voice processing unavailable ({e}): using AEC3"))
+        .ok()
     };
-    if stream.play().is_err() {
-        return;
+    #[cfg(not(target_os = "macos"))]
+    let voice: Option<()> = None;
+    // While Apple's unit is open, macOS turns a second, plain microphone stream about 13 times
+    // down, below the speech detector: the listening session records from this one instead.
+    if voice.is_some() {
+        *tap.lock().expect("tap") = (rate, None);
     }
+    let stream = if voice.is_some() {
+        None
+    } else {
+        let s = shared.clone();
+        let stream = dev.build_input_stream(
+            cfg.into(),
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                if let Ok(mut b) = s.try_lock() {
+                    b.extend(downmix(data, channels));
+                }
+            },
+            |e| eprintln!("[wake] input stream error: {e}"),
+            None,
+        );
+        let Ok(stream) = stream else {
+            eprintln!("[wake] cannot open the microphone");
+            return;
+        };
+        if stream.play().is_err() {
+            return;
+        }
+        Some(stream)
+    };
     let mut seg = Segmenter::new(rate);
-    let mut echo = Echo::new(rate);
+    let mut echo = if voice.is_some() {
+        Some(Echo::done_by_system(rate))
+    } else {
+        Echo::new(rate)
+    };
     if echo.is_none() {
         eprintln!("[wake] echo canceller unavailable at {rate} Hz: talking over Markon is off");
     }
@@ -315,7 +370,11 @@ pub(crate) fn wake_thread(
     });
     eprintln!(
         "[wake] listening at {rate} Hz, echo canceller {}, talking over Markon {}",
-        if echo.is_some() { "on" } else { "off" },
+        match (&voice, &echo) {
+            (Some(_), _) => "Apple voice processing",
+            (None, Some(_)) => "AEC3",
+            (None, None) => "off",
+        },
         if detector.is_some() { "on" } else { "off" }
     );
     let chunk = echo
@@ -339,9 +398,17 @@ pub(crate) fn wake_thread(
             30
         };
         std::thread::sleep(Duration::from_millis(tick));
-        let fresh = std::mem::take(&mut *shared.lock().expect("wake buf"));
+        let mut fresh = std::mem::take(&mut *shared.lock().expect("wake buf"));
         let played = std::mem::take(&mut *play.render.lock().expect("render"));
-        if listening.load(Ordering::SeqCst) {
+        let played_rms = barge::rms(&played);
+        let tapped = match &tap.lock().expect("tap").1 {
+            Some(to) => {
+                let _ = to.send(std::mem::take(&mut fresh));
+                true
+            }
+            None => false,
+        };
+        if tapped || listening.load(Ordering::SeqCst) {
             seg.reset();
             pending.clear();
             barged = None;
@@ -393,7 +460,7 @@ pub(crate) fn wake_thread(
                     diag_frames += 1;
                     diag_rms = diag_rms.max(barge::rms(c));
                     let before = d.state();
-                    match d.push(&to16.push(c), sounding) {
+                    match d.push(&to16.push(c), sounding, played_rms) {
                         // About 200 ms of speech: stop in this same tick, never resume.
                         VadState::Speaking => {
                             play.cut();
@@ -401,8 +468,8 @@ pub(crate) fn wake_thread(
                             *handoff.lock().expect("handoff") = (rate, std::mem::take(&mut recent));
                             barged = Some(std::time::Instant::now());
                             eprintln!(
-                                "[barge] stop: speech over Markon (trigger {:.4}, floor {:.4})",
-                                d.trigger(),
+                                "[barge] stop: speech over Markon (gate {:.4}, floor {:.4})",
+                                d.gate(),
                                 d.floor()
                             );
                             sink(AudioEvent::BargeIn);
@@ -476,7 +543,8 @@ pub(crate) fn wake_thread(
             sink(AudioEvent::Wake { rest });
         }
     }
-    drop(stream);
+    *tap.lock().expect("tap") = (0, None);
+    drop((stream, voice));
 }
 
 #[cfg(test)]
@@ -495,39 +563,50 @@ mod tests {
 
     use super::*;
 
-    const SAID: &str =
-        "Your meeting with Sara is on Thursday at three. Deleting the staging files now.";
+    const REPLY: &str = "Your flight to Lisbon leaves on Friday at nine. I'm moving the old reports to the archive now.";
 
     #[test]
-    fn markons_own_words_are_not_the_user() {
-        assert!(is_own_words("", SAID));
-        assert!(is_own_words("...", SAID));
-        assert!(is_own_words("meeting with Sara is on Thursday", SAID));
-        // One misheard word among its own is still its own.
-        assert!(is_own_words("your meeting with Sarah is on Thursday", SAID));
-        assert!(is_own_words("Thursday.", SAID));
-        // A clipped form of one of its words.
-        assert!(is_own_words("File.", SAID));
+    fn a_stretch_of_the_reply_is_markons_own() {
+        assert!(is_own_words("", REPLY));
+        assert!(is_own_words("...", REPLY));
+        assert!(is_own_words("flight to Lisbon leaves on Friday", REPLY));
+        assert!(is_own_words("the archive now", REPLY));
+        assert!(is_own_words("Friday.", REPLY));
+        // Words as speech recognition mangles them.
+        assert!(is_own_words("Report.", REPLY));
+        assert!(is_own_words("flight to Lisbon leafs on Friday", REPLY));
     }
 
     #[test]
-    fn new_words_are_the_user() {
-        assert!(!is_own_words("no, I meant Friday", SAID));
-        assert!(!is_own_words("what about Friday instead", SAID));
-        // Shares roots with what Markon is saying, but more than one word: a real request (Jarvis).
-        assert!(!is_own_words("delete the file", SAID));
+    fn new_or_changed_words_are_the_user() {
+        assert!(!is_own_words("no, make it Saturday", REPLY));
+        assert!(!is_own_words("what time is it", REPLY));
+        // Corrections repeat most of the reply but change a word.
+        assert!(!is_own_words("leaves on Friday at ten", REPLY));
+        assert!(!is_own_words("Friday at ten", REPLY));
+        // Reply words out of order, or with words left out, are a request, not echo.
+        assert!(!is_own_words("move the reports", REPLY));
+        assert!(!is_own_words("archive the old flight", REPLY));
+        // A word that only looks like one of Markon's.
+        assert!(!is_own_words("fine", REPLY));
         // Nothing to compare with.
         assert!(!is_own_words("what time is it", ""));
     }
 
     #[test]
-    fn a_cancel_word_is_always_the_user() {
-        for w in ["Stop.", "wait", "No!", "cancel", "Hold on."] {
-            assert!(
-                !is_own_words(w, "No, stop, wait, cancel that, hold on."),
-                "{w}"
-            );
+    fn cutting_in_is_always_the_user() {
+        let reply = "No, the meeting moved. Wait for the confirmation, then stop the timer.";
+        for w in ["Stop.", "wait", "No!", "Cancel.", "Hold on."] {
+            assert!(!is_own_words(w, reply), "{w}");
         }
+    }
+
+    #[test]
+    fn likeness_of_words() {
+        assert_eq!(likeness("file", "file"), 1.0);
+        assert!(likeness("sara", "sarah") >= 0.8);
+        assert!(likeness("nine", "ten") < 0.5);
+        assert_eq!(likeness("", ""), 1.0);
     }
 
     #[test]
@@ -558,12 +637,19 @@ mod tests {
         assert!(!match_wake_within("I told Mark on Monday, hey"));
         assert_eq!(match_wake("Hey Mak."), Some(String::new()));
         assert_eq!(match_wake("Hey, Mac!"), Some(String::new()));
+        assert_eq!(match_wake("Mark."), Some(String::new()));
+        assert_eq!(match_wake("Mark"), Some(String::new()));
+        assert_eq!(
+            match_wake("Mark, what's the time?"),
+            Some("what's the time?".into())
+        );
     }
 
     #[test]
     fn ignores_ordinary_talk() {
         assert_eq!(match_wake("I told Mark on Monday"), None);
         assert_eq!(match_wake("Mark said he's coming"), None);
+        assert_eq!(match_wake("Mark my words"), None);
         assert_eq!(match_wake("Mac and cheese"), None);
         assert_eq!(match_wake("What did Markon say?"), None);
         assert_eq!(match_wake(""), None);

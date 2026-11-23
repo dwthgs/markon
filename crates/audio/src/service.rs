@@ -173,6 +173,7 @@ pub struct Audio {
     listening: Arc<AtomicBool>,
     wake: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
     handoff: crate::wake::Handoff,
+    tap: crate::wake::Tap,
     /// A turn is running: words said while Markon thinks reach it without the wake phrase.
     attentive: Arc<AtomicBool>,
     /// The voice the loaded speech engine speaks with (the persona's name follows it).
@@ -219,6 +220,7 @@ impl Audio {
             listening: Arc::new(AtomicBool::new(false)),
             wake: Mutex::new(None),
             handoff: Default::default(),
+            tap: Default::default(),
             attentive: Default::default(),
             voice: Mutex::new(None),
             vad: Mutex::new(None),
@@ -240,12 +242,13 @@ impl Audio {
         }
         let stop = Arc::new(AtomicBool::new(false));
         let vad = self.vad.lock().expect("vad").clone();
-        let (st, listening, attentive, play, handoff, sink, stt) = (
+        let (st, listening, attentive, play, handoff, tap, sink, stt) = (
             stop.clone(),
             self.listening.clone(),
             self.attentive.clone(),
             self.play.clone(),
             self.handoff.clone(),
+            self.tap.clone(),
             self.sink.clone(),
             self.stt.clone(),
         );
@@ -257,7 +260,7 @@ impl Audio {
             .name("markon-wake".into())
             .spawn(move || {
                 crate::wake::wake_thread(
-                    st, listening, attentive, play, handoff, sink, vad, transcribe,
+                    st, listening, attentive, play, handoff, tap, sink, vad, transcribe,
                 )
             })
         {
@@ -364,16 +367,17 @@ impl Audio {
         let rate = Arc::new(Mutex::new(0u32));
         let (ready_tx, ready_rx) = channel::<Result<(), AudioError>>();
         let thread = {
-            let (stop, buf, rate, sink, stt) = (
+            let (stop, buf, rate, sink, stt, tap) = (
                 stop.clone(),
                 buf.clone(),
                 rate.clone(),
                 self.sink.clone(),
                 self.stt.clone(),
+                self.tap.clone(),
             );
             std::thread::Builder::new()
                 .name("markon-mic".into())
-                .spawn(move || capture_thread(stop, buf, rate, sink, stt, ready_tx))
+                .spawn(move || capture_thread(stop, buf, rate, sink, stt, tap, ready_tx))
                 .map_err(|e| AudioError::Device(e.to_string()))?
         };
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
@@ -395,6 +399,8 @@ impl Audio {
             }
             Ok(Err(e)) => {
                 let _ = thread.join();
+                // The sink may call back into `is_listening`, which takes this lock.
+                drop(cap);
                 (self.sink)(match e {
                     AudioError::NoMicrophone => AudioEvent::NoMicrophone,
                     AudioError::MicDenied => AudioEvent::MicDenied,
@@ -497,75 +503,112 @@ fn capture_thread(
     rate_out: Arc<Mutex<u32>>,
     sink: EventSink,
     stt: Stt,
+    tap: crate::wake::Tap,
     ready: Sender<Result<(), AudioError>>,
 ) {
-    let host = cpal::default_host();
-    let Some(dev) = host.default_input_device() else {
-        let _ = ready.send(Err(AudioError::NoMicrophone));
-        return;
+    // Apple's echo-cancelled microphone, when the wake listener has it open. A second,
+    // plain stream next to it is turned down below the speech detector.
+    let tapped = {
+        let mut t = tap.lock().expect("tap");
+        (t.0 > 0).then(|| {
+            let (to, from) = channel::<Vec<f32>>();
+            t.1 = Some(to);
+            (t.0, from)
+        })
     };
-    let cfg = match dev.default_input_config() {
-        Ok(c) => c,
-        Err(e) => {
+    let host = cpal::default_host();
+    let dev = match &tapped {
+        Some(_) => None,
+        None => match host.default_input_device() {
+            Some(d) => Some(d),
+            None => {
+                let _ = ready.send(Err(AudioError::NoMicrophone));
+                return;
+            }
+        },
+    };
+    let cfg = match dev.as_ref().map(|d| d.default_input_config()) {
+        Some(Ok(c)) => Some(c),
+        Some(Err(e)) => {
             let _ = ready.send(Err(input_error(e)));
             return;
         }
+        None => None,
     };
-    let channels = cfg.channels() as usize;
-    let rate = cfg.sample_rate();
+    let rate = match (&tapped, &cfg) {
+        (Some((r, _)), _) => *r,
+        (None, Some(c)) => c.sample_rate(),
+        (None, None) => unreachable!("a device or the tap"),
+    };
     *rate_out.lock().expect("rate") = rate;
-    let config: cpal::StreamConfig = cfg.into();
     let mut fx = FeatureExtractor::new(rate);
     let mut vad = Vad::new(rate);
     let partial = Arc::new(Mutex::new(String::new()));
     let (b, s, p) = (buf.clone(), sink.clone(), partial.clone());
-    let mut mono = Vec::with_capacity(4096);
-    let stream = dev.build_input_stream(
-        config,
-        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            mono.clear();
-            mono.extend(downmix(data, channels));
-            if let Ok(mut b) = b.try_lock() {
-                b.extend_from_slice(&mono);
-            }
-            if let Some(f) = fx.push(&mono) {
-                s(AudioEvent::Features {
-                    who: Who::User,
-                    rms: f.rms,
-                    pitch: f.pitch,
-                    bands: f.bands,
-                });
-            }
-            let mid = p
-                .try_lock()
-                .map(|t| !t.is_empty() && !ends_clause(&t))
-                .unwrap_or(false);
-            match vad.push(&mono, mid) {
-                Some(EndOfSpeech::Started) => s(AudioEvent::SpeechStarted),
-                Some(EndOfSpeech::Ended) => s(AudioEvent::SpeechEnded),
-                None => {}
-            }
-        },
-        |e| eprintln!("[audio] input stream error: {e}"),
-        None,
-    );
-    let stream = match stream {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = ready.send(Err(input_error(e)));
-            return;
+    let mut process = move |mono: &[f32]| {
+        if let Ok(mut b) = b.try_lock() {
+            b.extend_from_slice(mono);
+        }
+        if let Some(f) = fx.push(mono) {
+            s(AudioEvent::Features {
+                who: Who::User,
+                rms: f.rms,
+                pitch: f.pitch,
+                bands: f.bands,
+            });
+        }
+        let mid = p
+            .try_lock()
+            .map(|t| !t.is_empty() && !ends_clause(&t))
+            .unwrap_or(false);
+        match vad.push(mono, mid) {
+            Some(EndOfSpeech::Started) => s(AudioEvent::SpeechStarted),
+            Some(EndOfSpeech::Ended) => s(AudioEvent::SpeechEnded),
+            None => {}
         }
     };
-    if let Err(e) = stream.play() {
-        let _ = ready.send(Err(input_error(e)));
-        return;
-    }
+    let (stream, from_tap) = match (tapped, dev, cfg) {
+        (Some((_, from)), _, _) => (None, Some((from, process))),
+        (None, Some(dev), Some(cfg)) => {
+            let channels = cfg.channels() as usize;
+            let mut mono = Vec::with_capacity(4096);
+            let stream = dev.build_input_stream(
+                cfg.into(),
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    mono.clear();
+                    mono.extend(downmix(data, channels));
+                    process(&mono);
+                },
+                |e| eprintln!("[audio] input stream error: {e}"),
+                None,
+            );
+            let stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = ready.send(Err(input_error(e)));
+                    return;
+                }
+            };
+            if let Err(e) = stream.play() {
+                let _ = ready.send(Err(input_error(e)));
+                return;
+            }
+            (Some(stream), None)
+        }
+        _ => unreachable!("a device or the tap"),
+    };
+    let mut from_tap = from_tap;
     let _ = ready.send(Ok(()));
     // Partial transcripts: whisper does not stream, so re-run on the growing clip about once a second.
     let mut last_len = 0;
     let mut next = Instant::now() + Duration::from_millis(900);
     while !stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(20));
+        if let Some((from, process)) = from_tap.as_mut() {
+            for pcm in from.try_iter() {
+                process(&pcm);
+            }
+        }
         if Instant::now() < next {
             continue;
         }
@@ -587,6 +630,12 @@ fn capture_thread(
                 *partial.lock().expect("partial") = text.clone();
                 sink(AudioEvent::PartialTranscript { text });
             }
+        }
+    }
+    tap.lock().expect("tap").1 = None;
+    if let Some((from, process)) = from_tap.as_mut() {
+        for pcm in from.try_iter() {
+            process(&pcm);
         }
     }
     drop(stream);

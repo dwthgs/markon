@@ -5,7 +5,8 @@ use webrtc_audio_processing::config::{Config, EchoCanceller, HighPassFilter};
 
 /// Echo cancellation on 10 ms mono frames at one sample rate.
 pub struct Echo {
-    ap: Processor,
+    /// None: the microphone arrives already clean (Apple's voice processing).
+    ap: Option<Processor>,
     frame: usize,
     render: Vec<f32>,
 }
@@ -20,10 +21,19 @@ impl Echo {
         });
         let frame = ap.num_samples_per_frame();
         Some(Self {
-            ap,
+            ap: Some(ap),
             frame,
             render: Vec::new(),
         })
+    }
+
+    /// For a microphone the system has already cleaned: `played` and `clean` do nothing.
+    pub fn done_by_system(rate: u32) -> Self {
+        Self {
+            ap: None,
+            frame: rate as usize / 100,
+            render: Vec::new(),
+        }
     }
 
     pub fn frame_len(&self) -> usize {
@@ -32,17 +42,20 @@ impl Echo {
 
     /// What the speakers just played (mono, same rate).
     pub fn played(&mut self, pcm: &[f32]) {
+        let Some(ap) = &self.ap else { return };
         self.render.extend_from_slice(pcm);
         let whole = self.render.len() / self.frame * self.frame;
         for f in self.render[..whole].chunks_exact(self.frame) {
-            let _ = self.ap.analyze_render_frame([f]);
+            let _ = ap.analyze_render_frame([f]);
         }
         self.render.drain(..whole);
     }
 
     /// One microphone frame of `frame_len()` samples, cleaned in place.
     pub fn clean(&mut self, frame: &mut [f32]) {
-        let _ = self.ap.process_capture_frame([frame]);
+        if let Some(ap) = &self.ap {
+            let _ = ap.process_capture_frame([frame]);
+        }
     }
 }
 

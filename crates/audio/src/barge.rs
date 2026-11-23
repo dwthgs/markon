@@ -38,6 +38,15 @@ const GAP_MS: f32 = 1000.0;
 const FLOOR_MIN: f32 = 0.002;
 const TRIGGER_MIN: f32 = 0.006;
 const TRIGGER_MAX: f32 = 0.015;
+// Turned up, the Mac's speakers left Markon's voice at 0.1 RMS after AEC3 (2026-11-20) and it cut
+// itself off. The grace window measures how much of what Markon plays comes back (echo / played,
+// both at their peak). The bar then follows what is playing now: high on a loud word, back to the
+// room's trigger in the gaps between words, where people cut in. A fixed bar at twice the peak echo
+// let the user through only after seconds of shouting.
+const ECHO_MARGIN: f32 = 1.5;
+/// Per 32 ms window: the played level fades over about 150 ms, as the echo's tail does.
+const PLAYED_DECAY: f32 = 0.8;
+const PLAYED_MIN: f32 = 0.005;
 
 fn windows(ms: f32) -> usize {
     (ms / WINDOW_MS).round() as usize
@@ -138,6 +147,11 @@ pub struct Detector<S> {
     grace: usize,
     quiet_pending: Vec<f32>,
     volume: f32,
+    /// Peaks in this reply's grace window: leftover echo, and Markon's own output.
+    echo_peak: f32,
+    played_peak: f32,
+    /// Markon's output level now, with the echo's tail.
+    played: f32,
 }
 
 impl<S: Scorer> Detector<S> {
@@ -158,6 +172,9 @@ impl<S: Scorer> Detector<S> {
             grace: 0,
             quiet_pending: Vec::new(),
             volume: 0.0,
+            echo_peak: 0.0,
+            played_peak: 0.0,
+            played: 0.0,
         }
     }
 
@@ -173,6 +190,16 @@ impl<S: Scorer> Detector<S> {
     /// The level a window must reach to count as speech.
     pub fn trigger(&self) -> f32 {
         (self.floor * MULTIPLIER).clamp(TRIGGER_MIN, TRIGGER_MAX)
+    }
+
+    /// The trigger, raised over the echo of what Markon is playing now.
+    pub fn gate(&self) -> f32 {
+        let ratio = if self.played_peak > PLAYED_MIN {
+            self.echo_peak / self.played_peak
+        } else {
+            0.0
+        };
+        self.trigger().max(ratio * self.played * ECHO_MARGIN)
     }
 
     /// Cleaned microphone audio heard while no reply is in progress: it teaches the floor. A block
@@ -195,27 +222,33 @@ impl<S: Scorer> Detector<S> {
     }
 
     /// Cleaned audio while a reply is in progress. `sounding` is true while Markon's voice is leaving
-    /// the speaker now, not merely while a reply is running. Returns the state after the last window.
-    pub fn push(&mut self, pcm: &[f32], sounding: bool) -> VadState {
+    /// the speaker now, not merely while a reply is running; `played` is that voice's RMS level.
+    /// Returns the state after the last window.
+    pub fn push(&mut self, pcm: &[f32], sounding: bool, played: f32) -> VadState {
         self.pending.extend_from_slice(pcm);
         let pending = std::mem::take(&mut self.pending);
         let (windows, rest) = pending.as_chunks::<WINDOW>();
         for w in windows {
-            self.window(w, sounding);
+            self.window(w, sounding, played);
         }
         self.pending = rest.to_vec();
         self.state
     }
 
     /// One window through the detector, with the grace and floor as the volume gate.
-    fn window(&mut self, w: &[f32], sounding: bool) {
+    fn window(&mut self, w: &[f32], sounding: bool, played: f32) {
         self.track_playback(sounding);
+        self.played = played.max(self.played * PLAYED_DECAY);
         let confidence = self.scorer.score(w);
         self.maybe_reset_model(confidence);
         // The volume is smoothed (factor 0.2) so the dip at the end of a word does not reset STARTING.
         self.volume += SMOOTHING * (rms(w) - self.volume);
-        let loud = self.volume >= self.trigger();
         let in_grace = self.grace > 0;
+        if in_grace && sounding {
+            self.echo_peak = self.echo_peak.max(self.volume);
+            self.played_peak = self.played_peak.max(self.played);
+        }
+        let loud = self.volume >= self.gate();
         self.grace = self.grace.saturating_sub(1);
         let speaking = confidence >= CONFIDENCE && loud && !in_grace;
         use VadState::*;
@@ -261,6 +294,7 @@ impl<S: Scorer> Detector<S> {
     fn track_playback(&mut self, sounding: bool) {
         if sounding && !self.sounding_before && (!self.sounded || self.silent > windows(GAP_MS)) {
             self.grace = windows(GRACE_MS);
+            (self.echo_peak, self.played_peak) = (0.0, 0.0);
         }
         self.sounded |= sounding;
         self.sounding_before = sounding;
@@ -289,6 +323,7 @@ impl<S: Scorer> Detector<S> {
     pub fn end_reply(&mut self) {
         self.pending.clear();
         self.volume = 0.0;
+        (self.echo_peak, self.played_peak, self.played) = (0.0, 0.0, 0.0);
         self.state = VadState::Quiet;
         (self.starting, self.stopping) = (0, 0);
         (self.sounding_before, self.sounded, self.silent, self.grace) = (false, false, 0, 0);
@@ -339,6 +374,9 @@ mod tests {
         all.chunks(160).map(<[f32]>::to_vec).collect()
     }
 
+    /// Markon's output level while it sounds, in the tests.
+    const PLAYED: f32 = 0.1;
+
     /// Milliseconds of audio fed until the detector first reports `want`, if ever.
     fn until(
         d: &mut Detector<Fake>,
@@ -346,10 +384,27 @@ mod tests {
         sounding: bool,
         want: VadState,
     ) -> Option<usize> {
+        until_over(
+            d,
+            frames,
+            sounding,
+            if sounding { PLAYED } else { 0.0 },
+            want,
+        )
+    }
+
+    /// `until`, with Markon playing at `played`.
+    fn until_over(
+        d: &mut Detector<Fake>,
+        frames: &[Vec<f32>],
+        sounding: bool,
+        played: f32,
+        want: VadState,
+    ) -> Option<usize> {
         let mut ms = 0;
         for f in frames {
             ms += f.len() * 1000 / RATE as usize;
-            if d.push(f, sounding) == want {
+            if d.push(f, sounding, played) == want {
                 return Some(ms);
             }
         }
@@ -401,9 +456,48 @@ mod tests {
     #[test]
     fn no_barge_in_for_500_ms_after_markon_starts_after_a_gap() {
         let mut d = det();
-        let at = until(&mut d, &tone(0.03, 2000), true, VadState::Speaking).expect("confirmed");
-        // Grace (16 windows, 512 ms) then the 200 ms start.
+        assert_eq!(
+            until(&mut d, &tone(0.03, 500), true, VadState::Speaking),
+            None
+        );
+        // Quiet echo through the grace window (16 windows, 512 ms), then the user: the 200 ms start.
+        let mut d = det();
+        let speech = [tone(0.002, 520), tone(0.03, 1500)].concat();
+        let at = until(&mut d, &speech, true, VadState::Speaking).expect("confirmed");
         assert!((690..=760).contains(&at), "confirmed after {at} ms");
+    }
+
+    #[test]
+    fn loud_echo_after_turning_the_volume_up_is_not_the_user() {
+        // Measured 2026-11-20: at high Mac volume Markon's voice reached 0.1 RMS after the echo
+        // canceller and cut every reply off after its first word.
+        let mut d = det();
+        assert_eq!(
+            until(&mut d, &tone(0.1, 3000), true, VadState::Starting),
+            None
+        );
+        // Talking clearly over it still stops Markon.
+        assert!(until(&mut d, &tone(0.3, 1000), true, VadState::Speaking).is_some());
+    }
+
+    #[test]
+    fn after_loud_echo_a_normal_voice_gets_in_between_markons_words() {
+        let mut d = det();
+        until(&mut d, &tone(0.1, 1000), true, VadState::Starting);
+        // Markon between words (output silent for 300 ms): the bar is back to the room's trigger.
+        let at = until_over(&mut d, &tone(0.03, 1000), true, 0.0, VadState::Speaking)
+            .expect("confirmed");
+        assert!(at <= 400, "confirmed after {at} ms");
+    }
+
+    #[test]
+    fn the_echo_level_is_relearned_each_reply() {
+        let mut d = det();
+        until(&mut d, &tone(0.1, 1000), true, VadState::Speaking);
+        d.end_reply();
+        // Volume turned down: the next reply's quiet echo sets the bar, and normal speech gets through.
+        let speech = [tone(0.002, 520), tone(0.03, 1500)].concat();
+        assert!(until(&mut d, &speech, true, VadState::Speaking).is_some());
     }
 
     #[test]
@@ -418,10 +512,12 @@ mod tests {
         assert!(at <= 230, "confirmed after {at} ms");
         // After more than a second of silence the next sentence does get one.
         tone(0.002, 1500).iter().for_each(|f| {
-            d.push(f, false);
+            d.push(f, false, 0.0);
         });
-        let at = until(&mut d, &tone(0.03, 2000), true, VadState::Speaking).expect("confirmed");
-        assert!(at >= 690, "confirmed after {at} ms");
+        assert_eq!(
+            until(&mut d, &tone(0.03, 500), true, VadState::Speaking),
+            None
+        );
     }
 
     #[test]
@@ -457,7 +553,7 @@ mod tests {
         assert_eq!(d.scorer.resets, 1);
         // Never while the user talks.
         tone(0.03, 3000).iter().for_each(|f| {
-            d.push(f, true);
+            d.push(f, true, PLAYED);
         });
         assert_eq!(d.state(), VadState::Speaking);
         assert_eq!(d.scorer.resets, 1);
@@ -505,12 +601,12 @@ mod tests {
         let echo: Vec<f32> = (0..RATE as usize)
             .map(|i| 0.002 * (i as f32 * 0.3).sin())
             .collect();
-        assert_eq!(d.push(&echo, true), VadState::Quiet);
+        assert_eq!(d.push(&echo, true, 0.1), VadState::Quiet);
         let mut ms = 0;
         for c in speech.chunks(160) {
             let c: Vec<f32> = c.iter().map(|x| x * gain).collect();
             ms += 10;
-            if d.push(&c, true) == VadState::Speaking {
+            if d.push(&c, true, 0.1) == VadState::Speaking {
                 break;
             }
         }

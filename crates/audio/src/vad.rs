@@ -85,8 +85,8 @@ impl Vad {
 
 /// Last words of someone still thinking: whisper puts a full stop after them all the same.
 const HESITATIONS: &[&str] = &[
-    "um", "umm", "uh", "uhh", "er", "erm", "hmm", "so", "and", "but", "or", "like", "the", "a", "to",
-    "because", "well",
+    "um", "umm", "uh", "uhh", "er", "erm", "hmm", "so", "and", "but", "or", "like", "the", "a",
+    "to", "because", "well",
 ];
 
 /// True when the transcript so far ends a clause or sentence, and not on a hesitation

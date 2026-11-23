@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Markon listens while you hold the talk hotkey. Audio is transcribed on this Mac and never stored or uploaded.</string>
+  <string>Markon keeps the microphone open to hear its wake phrase, and listens while you talk to it. Speech is transcribed on this Mac. Audio is never stored or uploaded.</string>
 </dict>
 </plist>

@@ -22,5 +22,8 @@ thiserror.workspace = true
 tokio.workspace = true
 webrtc-audio-processing = { workspace = true, features = ["bundled"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+markon-platform = { path = "../platform" }
+
 [lints]
 workspace = true
