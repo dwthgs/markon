@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools
       - uses: pnpm/action-setup@v4
         with:
           version: 12.4.2
@@ -20,7 +20,8 @@ jobs:
         with:
           node-version: 24.16.0
           cache: pnpm
-      - run: brew install cmake
+      # meson, ninja and pkgconf build WebRTC's echo canceller.
+      - run: brew install cmake meson ninja pkgconf
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium
       - run: pnpm biome check .

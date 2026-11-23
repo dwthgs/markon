@@ -7,6 +7,11 @@ version = 2
 yanked = "deny"
 # Unmaintained crates pulled in by Tauri's GTK/webkit stack do not build on macOS; only flag what we ship.
 unmaintained = "workspace"
+# Accepted risks. Each needs a reason.
+ignore = [
+  # chrono: unmaintained, no known vulnerability. croner, async-imap, oauth2 and rmcp depend on it.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained only; required by croner, async-imap, oauth2, rmcp" },
+]
 
 [licenses]
 version = 2
@@ -18,7 +23,7 @@ allow = [
 
 unused-allowed-license = "allow"
 
-# Our own crates are unpublished (publish = false) and proprietary.
+# Our own crates are unpublished (publish = false).
 [licenses.private]
 ignore = true
 

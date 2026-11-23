@@ -12,6 +12,9 @@ test-results/
 .wrangler/
 .dev.vars
 
+# Local Claude Code state: worktrees and preview config.
+.claude/
+
 # Model and voice binaries are fetched by models/manifest.json, never committed.
 models/*
 !models/manifest.json
