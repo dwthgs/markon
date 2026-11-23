@@ -1,5 +1,5 @@
 /* THEME: ARES (God of War) - RED. From the GridCN registry item `theme-ares`.
-   Applied when <html data-theme="ares"> ("hacker mode"). */
+   Applied when <html data-theme="ares"> ("activate Eclipse"). */
 :root[data-theme="ares"] {
   --primary: oklch(0.6 0.25 25);
   --primary-foreground: oklch(0.98 0 0);

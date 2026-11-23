@@ -68,6 +68,9 @@ export function useCards() {
       listen<Card[]>('markon://cards-load', ({ payload }) =>
         setCards(payload.filter((c) => c.status !== 'command')),
       ),
+      listen<string[]>('markon://cards-remove', ({ payload: ids }) =>
+        setCards((cs) => cs.filter((c) => !ids.includes(c.id))),
+      ),
       listen<AgentEvent>('markon://agent', ({ payload: e }) => {
         if (e.type === 'turn_cancelled') setCards((cs) => cs.filter((c) => c.turn_id !== e.data.turn_id));
       }),

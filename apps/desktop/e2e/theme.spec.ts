@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-/* "Hacker mode" swaps to the GridCN Ares theme at once; "normal mode" swaps back. */
+/* "Activate Eclipse" swaps to the GridCN Ares theme at once; "normal mode" swaps back. */
 test('the theme command switches between Tron and Ares', async ({ page }) => {
   await page.goto('/?e2e');
   await page.waitForFunction(() => window.__e2e !== undefined);

@@ -55,6 +55,8 @@ pub struct Core {
     conv: Arc<Mutex<Option<i64>>>,
     /// Card ids per turn, so a cancelled turn leaves none behind.
     turn_card_ids: Arc<Mutex<HashMap<u64, Vec<String>>>>,
+    /// Step cards per turn that ended in an error, removed when the turn still finishes.
+    failed_cards: Arc<Mutex<HashMap<u64, Vec<String>>>>,
     /// A scheduled run during a call posts a card instead of speaking.
     muted: AtomicBool,
     sentences: Mutex<SentenceQueue>,
@@ -377,13 +379,15 @@ impl Core {
         let conv: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
         let turn_card_ids: Arc<Mutex<HashMap<u64, Vec<String>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let failed_cards: Arc<Mutex<HashMap<u64, Vec<String>>>> = Default::default();
         let media_started = Arc::new(AtomicBool::new(false));
-        let (card_app, card_mem, card_conv, card_ids, card_media) = (
+        let (card_app, card_mem, card_conv, card_ids, card_media, card_failed) = (
             app.clone(),
             memory.clone(),
             conv.clone(),
             turn_card_ids.clone(),
             media_started.clone(),
+            failed_cards.clone(),
         );
         let card_sink: Arc<dyn Fn(Card) + Send + Sync> = Arc::new(move |c: Card| {
             allow_media(&card_app, &c.body);
@@ -391,6 +395,14 @@ impl Core {
                 card_media.store(true, Ordering::SeqCst);
             }
             let _ = card_app.emit(workspace::EV_CARD, &c);
+            {
+                let mut f = card_failed.lock().expect("failed");
+                let ids = f.entry(c.turn_id).or_default();
+                ids.retain(|id| id != &c.id);
+                if c.status == CardStatus::Error && c.kind != CardKind::Agent {
+                    ids.push(c.id.clone());
+                }
+            }
             // Cards persist per conversation so History can bring them back.
             if let Some(cv) = *card_conv.lock().expect("conv") {
                 let kind = serde_json::to_value(c.kind)
@@ -534,6 +546,7 @@ impl Core {
             skills,
             conv,
             turn_card_ids,
+            failed_cards,
             muted: AtomicBool::new(false),
             sentences: Mutex::new(SentenceQueue::new(MAX_SENTENCES)),
             reply_started: AtomicBool::new(false),
@@ -730,6 +743,7 @@ impl Core {
             }
             AgentEvent::TurnFinished(t) => {
                 self.persist_turn(t);
+                self.drop_failed_steps(t.turn_id, t.partial);
                 if self.muted.swap(false, Ordering::SeqCst) {
                     // Quiet delivery: the answer is pinned as a note and nothing is spoken.
                     self.reset_reply();
@@ -762,6 +776,7 @@ impl Core {
             }
             AgentEvent::TurnCancelled { turn_id } => {
                 self.pending_facts.lock().expect("pending").remove(turn_id);
+                self.failed_cards.lock().expect("failed").remove(turn_id);
                 if let (Some(cv), Some(ids)) = (
                     *self.conv.lock().expect("conv"),
                     self.turn_card_ids.lock().expect("ids").remove(turn_id),
@@ -774,6 +789,24 @@ impl Core {
             }
             _ => {}
         }
+    }
+
+    /// A turn that finished worked around its failed steps: their cards go, and the ✗ stays in
+    /// the agent card's step list. A partial turn keeps them, since they explain what is missing.
+    fn drop_failed_steps(&self, turn_id: u64, partial: bool) {
+        let ids = self
+            .failed_cards
+            .lock()
+            .expect("failed")
+            .remove(&turn_id)
+            .unwrap_or_default();
+        if partial || ids.is_empty() {
+            return;
+        }
+        if let Some(cv) = *self.conv.lock().expect("conv") {
+            let _ = self.memory.delete_cards_where(cv, &ids);
+        }
+        let _ = self.app.emit(workspace::EV_CARDS_REMOVE, &ids);
     }
 
     fn speak_all(&self, sentences: Vec<String>) {
@@ -1074,21 +1107,27 @@ impl Core {
     }
 
     pub async fn submit(&self, turn: UserTurn) {
-        // While a question is on screen, what the user says next answers it.
+        let command = crate::voice_commands::parse(&turn.text).is_some();
+        // While a question is on screen, what the user says next answers it. A voice command
+        // ("activate Eclipse") is not an answer and leaves the question open.
         if self.prompter.waiting() {
             match crate::workspace::spoken_answer(&turn.text) {
                 Some(d) => {
                     self.prompter.answer_spoken(d);
                     return;
                 }
-                None => {
+                None if !command => {
                     self.prompter
                         .answer_spoken(markon_tools::permissions::Decision::Deny);
                 }
+                None => {}
             }
         }
-        if crate::voice_commands::handle(self, &turn.text) {
-            self.agent.set_state(AgentState::Idle);
+        if command && crate::voice_commands::handle(self, &turn.text) {
+            // Said mid-turn (thinking, or the reply still coming), the turn carries on.
+            if self.turn_done.load(Ordering::SeqCst) {
+                self.agent.set_state(AgentState::Idle);
+            }
             return;
         }
         let source = match turn.source {

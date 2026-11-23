@@ -38,7 +38,7 @@ fn normalise(text: &str) -> String {
     t.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Command words for whisper to expect, so "hacker mode" is not heard as "Hi, Karamod".
+/// Command words for whisper to expect, so "activate Eclipse" is not heard as "activate the clips".
 /// The first phrase of each command: listing them all would make whisper invent them in noise.
 pub fn vocabulary() -> String {
     let mut words: Vec<&str> = Vec::new();
@@ -52,8 +52,8 @@ pub fn vocabulary() -> String {
     format!("{}.", words.join(", "))
 }
 
-/// Words people wrap around a command ("Stop. Go to standby.", "okay hacker mode please").
-const LEAD: [&str; 9] = [
+/// Words people wrap around a command ("Stop. Go to standby.", "okay activate eclipse please").
+const LEAD: [&str; 12] = [
     "hey markon ",
     "hey markan ",
     "markon ",
@@ -63,19 +63,25 @@ const LEAD: [&str; 9] = [
     "ok ",
     "please ",
     "now ",
+    "cool ",
+    "alright ",
+    "all right ",
 ];
 const TAIL: [&str; 4] = [" please", " now", " thanks", " thank you"];
-/// Verbs in front of a command: "go to standby", "switch to hacker mode", "change normal mode".
+/// Verbs in front of a command: "go to standby", "switch to eclipse mode", "change normal mode".
 /// Tried one at a time, so a phrase that starts with one ("go away") still matches as written.
-const VERB: [&str; 8] = [
+/// "good " is whisper's usual hearing of a quick "go to" ("good standby").
+const VERB: [&str; 10] = [
     "go to ",
     "switch to ",
     "change to ",
     "back to ",
     "turn on ",
+    "activate ",
     "change ",
     "switch ",
     "go ",
+    "good ",
 ];
 
 /// What a phrase asks for, if it is a local command. A repeated command ("Stand by. Go to stand
@@ -224,21 +230,26 @@ mod tests {
     }
 
     #[test]
-    fn hacker_mode_switches_the_theme() {
-        assert_eq!(parse("Hacker mode!"), Some(("theme", "ares".into())));
+    fn activate_eclipse_switches_the_theme() {
+        assert_eq!(parse("Activate Eclipse!"), Some(("theme", "ares".into())));
         assert_eq!(
-            parse("Markon, change hacker mode."),
+            parse("Markon, activate Eclipse."),
             Some(("theme", "ares".into()))
         );
         assert_eq!(parse("Normal mode"), Some(("theme", "tron".into())));
+        assert_eq!(parse("Eclipse off."), Some(("theme", "tron".into())));
         assert_eq!(parse("Go to normal mode."), Some(("theme", "tron".into())));
         assert_eq!(
-            parse("Switch to hacker mode"),
+            parse("Switch to Eclipse mode"),
             Some(("theme", "ares".into()))
         );
         assert_eq!(parse("Go away"), Some(("hide", String::new())));
         assert_eq!(
-            parse("Okay, hacker mode please."),
+            parse("Activate Eclipse mode."),
+            Some(("theme", "ares".into()))
+        );
+        assert_eq!(
+            parse("Okay, activate Eclipse please."),
             Some(("theme", "ares".into()))
         );
     }
@@ -256,6 +267,8 @@ mod tests {
             "Stop. Go to stand-by.",
             "Hey Markon, standby",
             "Stand by. Go to Stand by.",
+            "good standby.",
+            "Cool, cool. Now good standby.",
         ] {
             assert_eq!(parse(heard), Some(("standby", String::new())), "{heard}");
         }
@@ -270,7 +283,7 @@ mod tests {
         for heard in ["Stand bye.", "Go to stand b", "Standbye", "Stand buy."] {
             assert_eq!(parse(heard), Some(("standby", String::new())), "{heard}");
         }
-        assert_eq!(parse("Hacker mood."), Some(("theme", "ares".into())));
+        assert_eq!(parse("Activate Eclipses."), Some(("theme", "ares".into())));
         assert_eq!(parse("Setting."), Some(("settings", String::new())));
         assert_eq!(parse("Clear the scream"), Some(("clear", String::new())));
     }
@@ -301,8 +314,11 @@ mod tests {
     #[test]
     fn vocabulary_names_each_command_once() {
         let v = super::vocabulary();
-        assert!(v.contains("hacker mode") && v.contains("standby"), "{v}");
-        assert!(!v.contains("change to hacker mode"), "{v}");
+        assert!(
+            v.contains("activate eclipse") && v.contains("standby"),
+            "{v}"
+        );
+        assert!(!v.contains("eclipse mode"), "{v}");
     }
 
     #[test]
@@ -323,7 +339,7 @@ mod tests {
             None
         );
         assert_eq!(parse("How do I quit smoking?"), None);
-        assert_eq!(parse("What is hacker mode in Linux?"), None);
+        assert_eq!(parse("When is the next solar eclipse?"), None);
         assert_eq!(parse("Now tell me about standby power"), None);
         assert_eq!(parse("Stand by. Then tell me the weather."), None);
     }

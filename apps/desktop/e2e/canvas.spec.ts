@@ -294,3 +294,13 @@ test('a research result lists its sources under the answer', async ({ page }) =>
   await expect(sources.getByRole('listitem')).toHaveCount(2);
   await expect(sources).toContainText('https://example.com/flights');
 });
+
+test('a failed step card goes when its turn finished anyway', async ({ page }) => {
+  await open(page);
+  await emit(page, 'markon://card', card('tool-1', 'page', 'Failed page', { status: 'error' }));
+  await emit(page, 'markon://card', card('result-1', 'result', 'The answer'));
+  await expect(page.getByText('Failed page', { exact: true })).toBeVisible();
+  await emit(page, 'markon://cards-remove', ['tool-1']);
+  await expect(page.getByText('Failed page', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('The answer', { exact: true })).toBeVisible();
+});

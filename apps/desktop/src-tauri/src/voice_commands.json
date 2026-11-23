@@ -6,6 +6,6 @@
   { "command": "clear", "phrases": ["clear the screen", "clear screen", "clear view", "clear the view"] },
   { "command": "standby", "phrases": ["standby", "stand by", "on standby"] },
   { "command": "bigger", "phrases": ["bigger", "make it bigger"] },
-  { "command": "theme", "arg": "ares", "phrases": ["hacker mode", "hacker mode on"] },
-  { "command": "theme", "arg": "tron", "phrases": ["normal mode", "hacker mode off"] }
+  { "command": "theme", "arg": "ares", "phrases": ["activate eclipse", "eclipse mode", "eclipse on"] },
+  { "command": "theme", "arg": "tron", "phrases": ["normal mode", "eclipse off"] }
 ]
