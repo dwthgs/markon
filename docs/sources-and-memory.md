@@ -174,8 +174,8 @@ Sending details:
 
 ## Private sources
 
-Settings can mark sources as private (`sources.private`). Their text never reaches a cloud model
-(`for_cloud` in `tool.rs`):
+Settings can mark sources as private (`sources.private`). Their text never reaches a cloud model, in
+`what_did_i_miss` (`for_cloud` in `tool.rs`) or in search results (`for_cloud` in `search.rs`):
 
 - With a local model available, it summarises the items on your Mac in at most four lines and leaves out
   phone numbers, addresses, codes and anything that looks like a password. The model sees only the

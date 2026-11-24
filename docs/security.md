@@ -198,7 +198,5 @@ screen is someone else's words. Markon treats it as data:
 - "Stop" stops running tools, but a Mac control action (AppleScript) that has already started still
   finishes.
 - The memory database is not encrypted.
-- Items from private sources are added to the search index, and `search_my_stuff` results go to the
-  model you chose, private or not.
 
 Treat approved folders and connected sources accordingly.

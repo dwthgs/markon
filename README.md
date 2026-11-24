@@ -66,7 +66,7 @@ Markon has no telemetry, analytics, crash reporting or update checks.
 | Microphone audio                                     | Transcribed on your Mac. Not stored, not uploaded. Once the speech models load, the microphone stays open to hear the wake phrase, and that audio is checked on your Mac too. |
 | What you said, tool results, screenshots you ask for | The model route you chose: Anthropic, OpenRouter, Claude Code, or a local model.                                                                                              |
 | Reply text                                           | Stays local with the Kokoro voice. Sent to Cartesia only if you pick the online voice.                                                                                        |
-| Mail, messages, calendar, notes                      | Read locally. In "what did I miss", private sources are summarised by a local model or left out. Search results from them reach the model you chose.                          |
+| Mail, messages, calendar, notes                      | Read locally. Private sources, in what you missed and in search results, are summarised by a local model or left out before a cloud model sees anything.                      |
 | API keys and tokens                                  | macOS keychain only (service `com.markon.desktop`).                                                                                                                           |
 | History, memory, cards, traces                       | A plain SQLite database in `~/.markon`. It is not encrypted.                                                                                                                  |
 
@@ -87,8 +87,7 @@ You can answer a Send prompt by voice. Execute and Write prompts need a click. A
 
 Known gaps: fetching a web page or opening a URL does not ask, so text injected by a web page or an email
 could make the model request an attacker's URL. Approving a folder for writing covers dotfiles in it.
-Items from private sources are searchable, and search results go to the model you chose. Treat approved
-folders and connected sources accordingly.
+Treat approved folders and connected sources accordingly.
 
 ## Known limitations
 

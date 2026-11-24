@@ -499,6 +499,7 @@ impl Core {
                             },
                             memory: memory.clone(),
                             embed: embed.clone(),
+                            private: private.clone(),
                         },
                         pending: pending_facts.clone(),
                     },

@@ -461,6 +461,7 @@ async fn my_stuff_is_searchable_and_people_are_one_person() {
         inner: NoTools,
         memory: memory.clone(),
         embed,
+        private: Default::default(),
     };
     let out = s
         .call(ToolCall {
@@ -504,5 +505,111 @@ async fn my_stuff_is_searchable_and_people_are_one_person() {
     assert!(
         who.contains("phone: 155550100") && who.contains("email: sara@work.example"),
         "{who}"
+    );
+}
+
+/// Search results from a private source never reach the cloud model either; a local model
+/// summarises them, and without one they are left out.
+#[tokio::test]
+async fn private_search_results_are_summarised_on_this_mac_or_left_out() {
+    use markon_sources::search::{self, WithSearch};
+    use markon_sources::tool::Private;
+    let memory = Arc::new(Memory::open_in_memory().unwrap());
+    let embed: search::SharedEmbedder = Default::default();
+    let item = |source: &str, id: &str, text: &str| markon_sources::Item {
+        source: source.into(),
+        id: id.into(),
+        who: "Sara".into(),
+        place: "Messages".into(),
+        when_ms: 1,
+        text: text.into(),
+        link: None,
+        unread: true,
+    };
+    search::index_items(
+        &memory,
+        &[
+            item(
+                "imessage",
+                "1",
+                "The gate code is 4471 and the rope is in my car",
+            ),
+            item("mail", "2", "Your rope delivery is confirmed for Friday"),
+        ],
+        &embed,
+    );
+    async fn search(
+        memory: &Arc<Memory>,
+        embed: &search::SharedEmbedder,
+        private: Private,
+    ) -> String {
+        WithSearch {
+            inner: NoTools,
+            memory: memory.clone(),
+            embed: embed.clone(),
+            private: Arc::new(RwLock::new(private)),
+        }
+        .call(ToolCall {
+            id: "s".into(),
+            name: "search_my_stuff".into(),
+            input: json!({"query": "rope"}),
+            turn_id: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+    }
+
+    let none = search(
+        &memory,
+        &embed,
+        Private {
+            ids: vec!["imessage".into()],
+            summariser: None,
+        },
+    )
+    .await;
+    assert!(
+        none.contains("rope delivery is confirmed"),
+        "public results stay: {none}"
+    );
+    assert!(
+        !none.contains("4471") && !none.contains("in my car"),
+        "{none}"
+    );
+    assert!(
+        none.contains("1 results from private sources are kept on this Mac"),
+        "{none}"
+    );
+
+    let local = Arc::new(FakeProvider::new(vec![FakeProvider::text(
+        "Sara wrote that the rope is with her.",
+    )]));
+    let summarised = search(
+        &memory,
+        &embed,
+        Private {
+            ids: vec!["imessage".into()],
+            summariser: Some((local.clone(), "local".into())),
+        },
+    )
+    .await;
+    assert!(
+        summarised.contains("the rope is with her")
+            && summarised.contains("Summarised on this Mac"),
+        "{summarised}"
+    );
+    assert!(
+        !summarised.contains("4471"),
+        "the raw text stays on the Mac: {summarised}"
+    );
+    let asked = serde_json::to_string(&local.requests.lock().unwrap()[0].messages).unwrap();
+    assert!(asked.contains("4471"), "the local model saw the raw text");
+    assert!(local.requests.lock().unwrap()[0].tools.is_empty());
+
+    let public = search(&memory, &embed, Private::default()).await;
+    assert!(
+        public.contains("gate code is 4471"),
+        "sources not marked private are unchanged: {public}"
     );
 }

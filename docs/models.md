@@ -176,7 +176,9 @@ codes and anything that looks like a password are left out. If the local model d
 is left out.
 
 The full items still show on the Source cards, which stay on the Mac. They are also added to the search
-index, and `search_my_stuff` results go to the model you chose, private or not.
+index, so they stay searchable: `search_my_stuff` treats hits from private sources the same way, summarised
+on the Mac or left out, and only the other results go to the model as they are (`for_cloud` in
+`crates/sources/src/search.rs`).
 
 "Screen" can be marked private the same way. Screenshots then stay on their card and are never sent to the
 model.
