@@ -1,5 +1,7 @@
 # Markon
 
+![Markon](docs/markon-hero.png)
+
 A desktop voice assistant for macOS. You talk, it answers out loud, and the work it does shows up as cards
 around an animated voice core. Built with Tauri 2: a Rust core and a React interface.
 
@@ -12,8 +14,8 @@ against real accounts and hardware. Expect rough edges.
   the default voice (Kokoro) run on your Mac. You can talk over a reply to interrupt it.
 - **Act with approval.** Read and write files in folders you approve, run commands, control apps and system
   settings, drive a browser, send mail and messages. Anything that changes something asks first.
-- **Know your stuff.** Optional sources (mail, iMessage, Calendar, Notes, GitHub, MCP servers), memory you
-  ask it to keep, search over approved folders. Every source starts switched off.
+- **Know your stuff.** Optional sources (mail, iMessage, Calendar, Notes, GitHub, MCP servers), memory of
+  what you tell it, search over approved folders. Every source starts switched off.
 - **Scheduled agents and skills** as plain files in `~/.markon/`.
 
 ## Requirements
@@ -64,7 +66,7 @@ Markon has no telemetry, analytics, crash reporting or update checks.
 | Microphone audio                                     | Transcribed on your Mac. Not stored, not uploaded. Once the speech models load, the microphone stays open to hear the wake phrase, and that audio is checked on your Mac too. |
 | What you said, tool results, screenshots you ask for | The model route you chose: Anthropic, OpenRouter, Claude Code, or a local model.                                                                                              |
 | Reply text                                           | Stays local with the Kokoro voice. Sent to Cartesia only if you pick the online voice.                                                                                        |
-| Mail, messages, calendar, notes                      | Read locally. Private sources are summarised by a local model or left out before a cloud model sees anything.                                                                 |
+| Mail, messages, calendar, notes                      | Read locally. In "what did I miss", private sources are summarised by a local model or left out. Search results from them reach the model you chose.                          |
 | API keys and tokens                                  | macOS keychain only (service `com.markon.desktop`).                                                                                                                           |
 | History, memory, cards, traces                       | A plain SQLite database in `~/.markon`. It is not encrypted.                                                                                                                  |
 
@@ -78,13 +80,15 @@ Markon can control your Mac, so every tool sits in a tier:
 - **Read**: only inside folders you approved. Secret files (`.env`, keys) are always refused.
 - **Write**: asks once per folder.
 - **Execute** (commands, MCP tools, app control): asks every time and shows exactly what will run.
-- **Send** (mail, messages, calendar): asks every time with the exact text.
+- **Send** (mail, messages, calendar): asks with the exact text. For a message to one person you can
+  answer "always yes", which stops applying once the conversation has read outside content.
 
 You can answer a Send prompt by voice. Execute and Write prompts need a click. A spoken "no" always works.
 
-Known gaps, being worked on: fetching a web page or opening a URL does not ask, so text injected by a web
-page or an email could make the model request an attacker's URL. Approving a folder for writing covers
-dotfiles in it. Treat approved folders and connected sources accordingly.
+Known gaps: fetching a web page or opening a URL does not ask, so text injected by a web page or an email
+could make the model request an attacker's URL. Approving a folder for writing covers dotfiles in it.
+Items from private sources are searchable, and search results go to the model you chose. Treat approved
+folders and connected sources accordingly.
 
 ## Known limitations
 
@@ -104,7 +108,19 @@ packages/voice-core/     the animated voice core, a standalone React component
 crates/                  Rust crates: audio, agent, provider, platform, tools, memory, scheduler, sources, llm, hands, evals
 services/relay/          Cloudflare Worker for a free trial (not deployed)
 models/manifest.json     model and voice files: url, size, SHA-256, licence
+docs/                    how Markon works, see below
 ```
+
+## Documentation
+
+- [Architecture](docs/architecture.md): the crates, the app shell and how a request flows
+- [Voice](docs/voice.md): listening, speech to text, voices and talking over Markon
+- [Agent and tools](docs/agent-and-tools.md): the agent loop, tool tiers, approvals and cards
+- [Models](docs/models.md): model routes, private routing and pinned model files
+- [Sources and memory](docs/sources-and-memory.md): connected sources, memory and search
+- [Automation](docs/automation.md): agent files, skills, reminders and the watch agent
+- [Security](docs/security.md): the safety model, guards and known gaps
+- [Development](docs/development.md): building, checks and tests
 
 ## Checks
 
